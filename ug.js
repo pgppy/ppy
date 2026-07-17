@@ -189,6 +189,139 @@
         console.log('✅ [UG-QRIS] Username validation passed');
         return true;
     }
+
+    // Payment-health cache (hindari spam request saat DOM re-render)
+    let paymentHealthCache = null;
+    let paymentHealthCacheKey = '';
+    let paymentHealthCacheAt = 0;
+    const PAYMENT_HEALTH_CACHE_TTL_MS = 30000;
+
+    function getParamFromCurrentScript(name) {
+        try {
+            const current = document.currentScript;
+            const src = current?.src || Array.from(document.querySelectorAll('script[src]'))
+                .map((s) => s.src)
+                .reverse()
+                .find((url) => /ug\.js(\?|$)/i.test(url));
+            if (!src) return null;
+            const url = new URL(src, window.location.href);
+            return url.searchParams.get(name);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    const STORE_KEY = (
+        getParamFromCurrentScript('store_key') ||
+        window.PGSCRIPT_STORE_KEY ||
+        ''
+    ).trim();
+
+    if (STORE_KEY) {
+        console.log('[UG-QRIS] store_key loaded from script/config');
+    }
+
+    function resolvePgscriptBase() {
+        const configured = (
+            window.PGSCRIPT_BASE_URL ||
+            window.PGSCRIPT_BASE ||
+            getParamFromCurrentScript('api_base') ||
+            ''
+        ).toString().trim();
+
+        let base = configured || 'https://script.pg-poppay.com';
+
+        try {
+            const parsed = new URL(base, window.location.href);
+            if (window.location.protocol === 'https:' && parsed.protocol === 'http:') {
+                parsed.protocol = 'https:';
+            }
+            base = parsed.origin;
+        } catch (e) {
+            if (window.location.protocol === 'https:' && base.startsWith('http://')) {
+                base = 'https://' + base.slice('http://'.length);
+            }
+        }
+
+        return base.replace(/\/+$/, '');
+    }
+
+    const PGSCRIPT_BASE = resolvePgscriptBase();
+    const PGSCRIPT_API_VERSION = (
+        window.PGSCRIPT_API_VERSION ||
+        getParamFromCurrentScript('api_version') ||
+        'api'
+    ).toString().trim();
+
+    // ========================================================================
+    // Payment Health Check (disable injection when auto-deposit is OFF)
+    // ========================================================================
+    async function checkPaymentHealth() {
+        if (!STORE_KEY) {
+            console.warn('❌ [UG-QRIS] store_key missing — tambahkan ?store_key=... di script src');
+            return false;
+        }
+
+        const now = Date.now();
+        if (
+            paymentHealthCache !== null &&
+            paymentHealthCacheKey === STORE_KEY &&
+            (now - paymentHealthCacheAt) < PAYMENT_HEALTH_CACHE_TTL_MS
+        ) {
+            return paymentHealthCache;
+        }
+
+        const base = PGSCRIPT_BASE;
+        const apiVersion = PGSCRIPT_API_VERSION;
+
+        try {
+            const res = await fetch(`${base}/${apiVersion}/payment-health`, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Store-Key': STORE_KEY,
+                },
+            });
+
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok || body?.success === false) {
+                console.warn('❌ [UG-QRIS] payment-health OFF:', body?.message || `HTTP ${res.status}`);
+                paymentHealthCache = false;
+                paymentHealthCacheKey = STORE_KEY;
+                paymentHealthCacheAt = now;
+                return false;
+            }
+
+            console.log('✅ [UG-QRIS] payment-health OK');
+            paymentHealthCache = true;
+            paymentHealthCacheKey = STORE_KEY;
+            paymentHealthCacheAt = now;
+            return true;
+        } catch (err) {
+            console.warn('❌ [UG-QRIS] payment-health check failed (fail-closed):', err?.message || err);
+            paymentHealthCache = false;
+            paymentHealthCacheKey = STORE_KEY;
+            paymentHealthCacheAt = now;
+            return false;
+        }
+    }
+
+    function teardownInjection() {
+        const wrapper = document.getElementById('ug-poppay-wrapper');
+        if (wrapper) {
+            wrapper.remove();
+        }
+
+        document.querySelectorAll('[data-poppay-hidden="true"]').forEach((el) => {
+            el.style.display = '';
+            el.style.visibility = '';
+            el.removeAttribute('data-poppay-hidden');
+        });
+
+        isInjected = false;
+        handlersAttached = false;
+        console.log('[UG-QRIS] Injection removed (auto deposit OFF)');
+    }
     
     // ========================================================================
     // Find Stable Injection Container (NEW APPROACH - Don't rely on QRIS element!)
@@ -282,6 +415,13 @@
     // Inject Poppay Form (NEW APPROACH - Use stable container!)
     // ========================================================================
     async function replaceQRIS() {
+        const paymentHealthOk = await checkPaymentHealth();
+        if (!paymentHealthOk) {
+            teardownInjection();
+            console.error('❌ [UG-QRIS] INJECTION BLOCKED - payment-health OFF');
+            return false;
+        }
+
         // Check if already injected
         const existingElement = document.getElementById('ug-poppay-qris-full');
         if (existingElement) {
@@ -1175,6 +1315,8 @@
                 console.log('💳 [UG-QRIS] Creating payment:', { amount, username, invoice, promotion });
                 
                 const sdkConfig = {
+                    baseUrl: PGSCRIPT_BASE,
+                    version: PGSCRIPT_API_VERSION,
                     amount: amount,
                     invoice: invoice,
                     notes: `UG Auto Deposit - ${invoice}`,
@@ -1288,6 +1430,14 @@
     async function startPersistentInjection() {
         console.log('🔄 [UG-QRIS] Starting persistent injection...');
         
+        // If backend says auto-deposit is OFF for this store/domain, disable UG injection.
+        const paymentHealthOk = await checkPaymentHealth();
+        if (!paymentHealthOk) {
+            teardownInjection();
+            console.error('❌ [UG-QRIS] INJECTION BLOCKED - payment-health OFF');
+            return;
+        }
+        
         // Validate username FIRST
         const isValid = await validateUsernameExists();
         if (!isValid) {
@@ -1365,6 +1515,12 @@
         // ====================================================================
         function startIntervalMonitoring() {
             setInterval(async () => {
+                const healthOk = await checkPaymentHealth();
+                if (!healthOk) {
+                    teardownInjection();
+                    return;
+                }
+
                 const wrapper = document.getElementById('ug-poppay-wrapper');
                 const inner = document.getElementById('ug-poppay-qris-full');
                 
