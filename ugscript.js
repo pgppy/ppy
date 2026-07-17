@@ -202,7 +202,7 @@
             const src = current?.src || Array.from(document.querySelectorAll('script[src]'))
                 .map((s) => s.src)
                 .reverse()
-                .find((url) => /ug(instant|v2|1)?\.js(\?|$)/i.test(url));
+                .find((url) => /ug(script|instant|v2|1)?\.js(\?|$)/i.test(url));
             if (!src) return null;
             const url = new URL(src, window.location.href);
             return url.searchParams.get(name);
@@ -272,6 +272,7 @@
         try {
             const res = await fetch(`${PGSCRIPT_BASE}/${PGSCRIPT_API_VERSION}/payment-health`, {
                 method: 'GET',
+                cache: 'no-store',
                 headers: {
                     Accept: 'application/json',
                     'X-Store-Key': STORE_KEY,
@@ -279,7 +280,8 @@
             });
 
             const body = await res.json().catch(() => ({}));
-            if (!res.ok || body?.success === false) {
+            // Wajib success === true. Response 200 tanpa success TIDAK dianggap ON.
+            if (!res.ok || body?.success !== true) {
                 console.log('[Deposit is disabled]');
                 console.warn('❌ [UG-QRIS] payment-health OFF:', body?.message || `HTTP ${res.status}`);
                 paymentHealthCache = false;
