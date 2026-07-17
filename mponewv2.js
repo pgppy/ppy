@@ -11,59 +11,42 @@
     if (oldStyle) oldStyle.remove();
 
     const darkThemeCSS = `
-            /* Only affect deposit section, not withdraw */
-            html body #nav-deposit #v-autobank,
-            html body #nav-deposit .qris-manual-wrapper,
-            html body #nav-deposit .card,
-            html body #nav-deposit .modal-content,
-            html body #qrButton,
-            html body #containerqris,
-            html body .transaksi-form #v-autobank,
-            html body .transaksi-form .qris-manual-wrapper {
+            html body #v-autobank,
+            html body #v-autobank .qris-manual-wrapper,
+            html body #v-autobank .card,
+            html body #v-autobank .modal-content {
                 background: #1a1a1a !important;
                 background-color: #1a1a1a !important;
                 color: #ffffff !important;
             }
             html body #v-autobank .qris-manual-header h5,
             html body #v-autobank .qris-manual-header p,
-            html body #v-autobank .qris-form label,
-            html body #qrButton .qris-manual-header h5,
-            html body #qrButton .qris-manual-header p,
-            html body #qrButton .qris-form label {
+            html body #v-autobank .qris-form label {
                 color: #ffffff !important;
             }
-            html body #v-autobank .text-muted,
-            html body #qrButton .text-muted {
+            html body #v-autobank .text-muted {
                 color: #aaaaaa !important;
             }
-            html body #v-autobank .form-control,
-            html body #qrButton .form-control {
+            html body #v-autobank .form-control {
                 background: #2a2a2a !important;
                 background-color: #2a2a2a !important;
                 color: #ffffff !important;
                 border-color: #444444 !important;
             }
-            html body #v-autobank .input-group-text,
-            html body #qrButton .input-group-text {
+            html body #v-autobank .input-group-text {
                 background: #333333 !important;
                 background-color: #333333 !important;
                 color: #ffffff !important;
                 border-color: #444444 !important;
             }
-            html body #v-autobank .btn-outline-primary,
-            html body #qrButton .btn-outline-primary,
-            .qris-amount-btn {
+            html body #v-autobank .btn-outline-primary {
                 color: #ffffff !important;
                 border-color: #444444 !important;
                 background: #2a2a2a !important;
                 background-color: #2a2a2a !important;
             }
             html body #v-autobank .btn-outline-primary:hover,
-            html body #v-autobank .btn-outline-primary.active,
-            html body #qrButton .btn-outline-primary:hover,
-            html body #qrButton .btn-outline-primary.active,
-            .qris-amount-btn:hover,
-            .qris-amount-btn.active {
+            html body #v-autobank .btn-outline-primary.active {
                 background: #0d6efd !important;
                 background-color: #0d6efd !important;
                 color: #ffffff !important;
@@ -301,53 +284,26 @@ class QrisSDKCustom {
   }
 
   initFormEvent() {
-    if (!this.form) {
-      console.log('[QRIS SDK] ⚠️ Form not found:', this.formId);
-      return;
-    }
+    if (!this.form) return;
 
-    console.log('[QRIS SDK] Initializing form event for:', this.formId);
-    
-    // Remove form action to prevent default submission
-    $(`#${this.formId}`).attr('action', 'javascript:void(0);');
-    
-    // Attach submit handler with multiple preventDefault mechanisms
-    $(`#${this.formId}`).off('submit.qrisSDK').on('submit.qrisSDK', async (e) => {
-      // ALWAYS prevent default first
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      
-      console.log('[QRIS SDK] Form submit intercepted');
-      
-      // Check jQuery validation if available
+    $(`#${this.formId}`).off('submit').on('submit', async (e) => {
       if (typeof $(this.form).valid === 'function' && !$(this.form).valid()) {
-        console.log('[QRIS SDK] ❌ Form validation failed');
-        return false;
+        return;
       }
+
+      e.preventDefault();
 
       const $depoForm = $(`#${this.formId}`);
-      
-      // Prevent double submission
-      if ($depoForm.data("depositSubmitting")) {
-        console.log('[QRIS SDK] ⚠️ Already submitting, blocked');
-        return false;
-      }
+      if ($depoForm.data("depositSubmitting")) return;
       $depoForm.data("depositSubmitting", true);
 
       const $depoBtn = $depoForm.find('button[type="submit"], input[type="submit"]');
       $depoBtn.prop("disabled", true);
 
       const amountValue = parseFloat(this.amountInput.value);
-      
-      // Validate amount
-      if (!amountValue || amountValue < 10000) {
-        alert('Jumlah deposit minimal Rp 10.000');
-        console.log('[QRIS SDK] ❌ Amount validation failed:', amountValue);
-        $depoForm.data("depositSubmitting", false);
-        $depoBtn.prop("disabled", false);
-        return false;
-      }
+      const randomRefId = 'INV-' + Date.now();
+      const bankChannel = this.invoiceInput ? this.invoiceInput.value : 'QRIS';
+      const username = await getUsername();
 
       // Live re-check gate sebelum create QR (OFF = jangan proses)
       if (typeof window.__mpoCheckPaymentHealth === 'function') {
@@ -357,32 +313,24 @@ class QrisSDKCustom {
           alert('Deposit otomatis sedang nonaktif. Silakan coba lagi nanti.');
           $depoForm.data("depositSubmitting", false);
           $depoBtn.prop("disabled", false);
-          return false;
+          return;
         }
       }
-      
-      const randomRefId = 'INV-' + Date.now();
-      const bankChannel = this.invoiceInput ? this.invoiceInput.value : 'QRIS';
-      const username = await getUsername();
 
       // Safety check: Block transaction if username is GUEST
       if (username.startsWith('GUEST-')) {
-        console.log('[QRIS SDK] ❌ Transaction blocked - Username not authenticated');
+        console.log('[QRIS AUTO] ❌ Transaction blocked - Username not authenticated');
         alert('Mohon login terlebih dahulu untuk melakukan deposit.');
         $depoForm.data("depositSubmitting", false);
         $depoBtn.prop("disabled", false);
-        return false;
+        return;
       }
 
-      console.log('[QRIS SDK] ✅ Processing payment:', { amount: amountValue, username, invoice: randomRefId });
-      
       // Hide form, show result container
       if (this.formContainer) this.formContainer.style.display = 'none';
       if (this.resultContainer) this.resultContainer.style.display = 'block';
 
       this.openPayment(amountValue, randomRefId, bankChannel, username);
-      
-      return false;
     });
   }
 
@@ -406,6 +354,8 @@ class QrisSDKCustom {
     if (typeof window.QrisSDK !== "undefined") {
       try {
         const payment = new window.QrisSDK({
+          baseUrl: window.PGSCRIPT_BASE_URL || 'https://script.pg-poppay.com',
+          version: window.PGSCRIPT_API_VERSION || 'api',
           amount: amount,
           invoice: invoice,
           notes: 'Deposit Auto - ' + invoice,
@@ -415,6 +365,11 @@ class QrisSDKCustom {
           displayMode: 'inline',  // ← INLINE MODE (iframe)
           containerId: 'qris-payment-frame',
           resultContainerId: 'payment-result',
+          onUnavailable: (health) => {
+            console.log('[QRIS AUTO] Deposit unavailable:', health);
+            alert('Deposit sementara tidak tersedia.');
+            this.resetForm();
+          },
           onSuccess: (data) => {
             console.log('[QRIS AUTO] Success:', data);
             this.onSuccess(data);
@@ -452,47 +407,37 @@ class QrisSDKCustom {
 }
 
 $(document).ready(async function () {
-console.log('[INJECT SCRIPT] Version 5.6 - Smart Inject Mode Starting...');
+  console.log('[INJECT SCRIPT] Version 5.5 - Smart Inject Mode Starting...');
 
-// ===================================================================
-// URL CHECK - Only inject on transaction/deposit page
-// ===================================================================
-const currentPath = window.location.pathname.toLowerCase();
-const currentHash = window.location.hash.toLowerCase();
+  // PGScript backend — create-tx boleh override; health FIXED ke script host
+  const PGSCRIPT_BASE = window.PGSCRIPT_BASE_URL || 'https://script.pg-poppay.com';
+  const PGSCRIPT_VERSION = window.PGSCRIPT_API_VERSION || 'api';
+  window.PGSCRIPT_BASE_URL = PGSCRIPT_BASE;
+  window.PGSCRIPT_API_VERSION = PGSCRIPT_VERSION;
 
-// Check if we're on deposit page
-const isDepositPage = currentPath.includes('/transaction') || 
-                     currentPath.includes('/deposit') ||
-                     currentHash.includes('#deposit') ||
-                     currentHash.includes('#transaction');
-
-if (!isDepositPage) {
-  console.log('[INJECT] ⛔ Not on deposit/transaction page, skipping injection');
-  console.log('[INJECT] Current path:', currentPath);
-  console.log('[INJECT] Current hash:', currentHash);
-  return; // Exit early - don't inject
-}
-
-console.log('[INJECT] ✅ On deposit/transaction page, proceeding with injection...');
-
-  // ===================================================================
-  // PGScript gate — store_key + payment-health (fail-closed)
-  // Health HANYA ke script.pg-poppay.com (sama seperti ug1.js)
-  // ===================================================================
+  // Health ON/OFF HANYA ke script.pg-poppay.com (fail-closed, sama ug1.js)
+  const HEALTH_BASE = 'https://script.pg-poppay.com';
+  const HEALTH_API_VERSION = 'api';
   let paymentHealthCache = null;
   let paymentHealthCacheKey = '';
   let paymentHealthCacheAt = 0;
   const PAYMENT_HEALTH_CACHE_TTL_MS = 30000;
 
+  // ============================================================
+  // One-link mode:
+  // <script src=".../mpo.js?store_key=sk_..."></script>
+  // Domain/query dibaca dari *script src*, bukan page URL.
+  // ============================================================
   function getParamFromCurrentScript(name) {
     try {
+      // Match mpo.js / mponewv2.js / mpov3.js / mpo*.js — currentScript null di jQuery ready
+      const mpoSrcRe = /(?:^|\/)mpo[^/]*\.js(?:\?|$)/i;
       const src =
         (document.currentScript && document.currentScript.src) ||
-        $('script[src*="mpo.js"]').last().attr('src') ||
         Array.from(document.querySelectorAll('script[src]'))
           .map((s) => s.src)
           .reverse()
-          .find((url) => /mpo\.js(\?|$)/i.test(url)) ||
+          .find((url) => mpoSrcRe.test(url)) ||
         '';
       if (!src) return null;
       const url = new URL(src, window.location.href);
@@ -502,17 +447,12 @@ console.log('[INJECT] ✅ On deposit/transaction page, proceeding with injection
     }
   }
 
-  const STORE_KEY = (
-    getParamFromCurrentScript('store_key') ||
-    window.PGSCRIPT_STORE_KEY ||
-    ''
-  ).trim();
-
-  const HEALTH_BASE = 'https://script.pg-poppay.com';
-  const HEALTH_API_VERSION = 'api';
-
-  console.log('[INJECT] gate=v20260717-mpo health=' + HEALTH_BASE);
-
+  const DOMAIN_OVERRIDE = getParamFromCurrentScript('domain');
+  const STORE_KEY = (getParamFromCurrentScript('store_key') || window.PGSCRIPT_STORE_KEY || '').trim();
+  const EFFECTIVE_DOMAIN = (DOMAIN_OVERRIDE || window.location.hostname || '').trim();
+  if (DOMAIN_OVERRIDE) {
+    console.log('[INJECT] domain override from script:', DOMAIN_OVERRIDE);
+  }
   if (STORE_KEY) {
     console.log('[INJECT] store_key loaded from script/config');
   } else {
@@ -521,19 +461,27 @@ console.log('[INJECT] ✅ On deposit/transaction page, proceeding with injection
     return;
   }
 
-  function teardownMpoInjection(reason) {
+  console.log('[INJECT] gate=v20260717-mpo health=' + HEALTH_BASE);
+
+  function disableDepositUI(reason) {
     try {
       console.log('[Deposit is disabled]');
       console.log('[INJECT] 🚫 Auto deposit OFF — teardown UI', reason || '');
       window.__PG_DEPOSIT_DISABLED = true;
 
+      const $tab = $("#nav-autobank-tab").closest('li');
+      if ($tab.length) $tab.remove();
+
+      const $content = $("#v-autobank");
+      if ($content.length) $content.remove();
+
       $('#qrButton').remove();
       $('#containerqris').remove();
-      $('.qris-manual-wrapper').remove();
+      $(".qris-manual-wrapper").remove();
       $('.component-tabs').has('#btnInstant').remove();
       $('#btnInstant, #btnManual').remove();
     } catch (e) {
-      console.log('[INJECT] teardown error', e);
+      console.log('[INJECT] disableDepositUI error', e);
     }
   }
 
@@ -561,7 +509,6 @@ console.log('[INJECT] ✅ On deposit/transaction page, proceeding with injection
           'X-Store-Key': STORE_KEY,
         },
       });
-
       const body = await res.json().catch(() => ({}));
       if (!res.ok || body?.success !== true) {
         console.log('[Deposit is disabled]');
@@ -571,7 +518,6 @@ console.log('[INJECT] ✅ On deposit/transaction page, proceeding with injection
         paymentHealthCacheAt = now;
         return false;
       }
-
       console.log('[INJECT] ✅ payment-health OK');
       paymentHealthCache = true;
       paymentHealthCacheKey = STORE_KEY;
@@ -591,12 +537,12 @@ console.log('[INJECT] ✅ On deposit/transaction page, proceeding with injection
 
   const healthOk = await checkPaymentHealth();
   if (!healthOk) {
-    teardownMpoInjection('payment-health OFF');
+    disableDepositUI('payment-health OFF');
     return;
   }
 
-// Helper to load external scripts dynamically
-function loadExternalScript(url) {
+  // Helper to load external scripts dynamically
+  function loadExternalScript(url) {
     return new Promise((resolve) => {
       if (url.includes('qris-sdk') && typeof window.QrisSDK !== 'undefined') {
         resolve();
@@ -671,9 +617,10 @@ function loadExternalScript(url) {
     });
   }
 
-  // Load external SDKs
+  // Load SDK dari server PGScript
+  const SDK_BASE = PGSCRIPT_BASE + '/sdk';
   await Promise.all([
-    loadExternalScript("https://unpkg.com/@poppackage/qris-payment-sdk/dist/qris-sdk.umd.js"),
+    loadExternalScript(SDK_BASE + "/qris-sdk.umd.js"),
     loadExternalScript("https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js")
   ]);
 
@@ -685,9 +632,113 @@ function loadExternalScript(url) {
   }
   console.log(`[INJECT] ✅ Username ${username} inject success`);
 
-  function initQrisSdk() {
-    setTimeout(() => {
-      if (typeof QrisSDKCustom !== "undefined") {
+  // Auto deposit ON/OFF sudah dicek di awal (support domain override).
+  if (window.__PG_DEPOSIT_DISABLED) return;
+
+  function initMpopayInstance() {
+    if (typeof QrisSDKCustom !== "undefined") {
+      new QrisSDKCustom({
+        formId: 'formDepositAuto',
+        onSuccess: (data) => {
+          console.log('[QRIS AUTO] Payment Success:', data);
+        },
+        onFailed: (status) => {
+          console.log('[QRIS AUTO] Payment Failed:', status);
+        }
+      });
+      console.log('[INJECT] ✅ QRIS Auto Tab (Inline Mode) initialized!');
+    }
+  }
+
+  // Check if "Instan Deposit" tab already exists
+  const existingAutoTab = $("#nav-autobank-tab");
+  const existingAutoContent = $("#v-autobank");
+
+  if (existingAutoContent.length > 0) {
+    console.log('[INJECT] Instan Deposit content (#v-autobank) already exists. Checking tab button...');
+
+    // Create tab button if it is missing
+    if (existingAutoTab.length === 0) {
+      console.log('[INJECT] Creating missing tab button...');
+      var instanTabButton = '<' + 'li class="nav-item">' +
+        '<' + 'a class="button-pills nav-link active" id="nav-autobank-tab" data-toggle="tab" data-type="Auto" href="#v-autobank" role="tab" aria-controls="nav-autobank" aria-expanded="true">' +
+        '<' + 'i class="fas fa-wallet"><' + '/i>' +
+        '<' + 'span>Instan Deposit<' + '/span>' +
+        '<' + '/a>' +
+        '<' + '/li>';
+      $(".payment-method").prepend(instanTabButton);
+    }
+
+    // Find the existing form
+    const existingForm = existingAutoContent.find('form#formDepositAuto');
+
+    if (existingForm.length > 0) {
+      console.log('[INJECT] Found existing form, checking if QRIS already injected...');
+
+      // Check if already injected
+      if (existingAutoContent.find('.qris-manual-wrapper').length > 0) {
+        console.log('[INJECT] ⚠️ QRIS already injected, skipping...');
+        return;
+      }
+
+      console.log('[INJECT] Injecting QRIS container above existing form...');
+
+      // Create QRIS container HTML
+      const qrisHTML = '<' + 'div class="qris-manual-wrapper" style="background: #1a1a1a; padding: 25px; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">' +
+        '<' + 'div class="qris-manual-header" style="margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid #f0f0f0;">' +
+        '<' + 'h5 style="color: #333; font-weight: 600; margin: 0; display: flex; align-items: center;">' +
+        '<' + 'i class="fas fa-qrcode" style="margin-right: 10px; color: #4CAF50;"><' + '/i>' +
+        'QRIS Payment - PopPay Instant' +
+        '<' + '/h5>' +
+        '<' + 'p style="color: #666; font-size: 13px; margin: 8px 0 0 0;">Scan QR code dengan e-wallet favorit Anda (DANA, OVO, GoPay, ShopeePay, dll)<' + '/p>' +
+        '<' + '/div>' +
+        '<' + 'div class="qris-form" id="qrisFormContainer">' +
+        '<' + 'form id="formDepositAutoQris" enctype="multipart/form-data" novalidate="novalidate">' +
+        '<' + 'input type="hidden" name="bankAuto" id="bankSelectAutoQris" value="QRIS">' +
+        '<' + 'div class="form-group mb-3">' +
+        '<' + 'label style="color: #555; font-weight: 500; margin-bottom: 8px; display: block;">Jumlah Deposit</' + 'label>' +
+        '<' + 'div class="d-flex flex-wrap gap-2 mb-3" style="gap: 10px;">' +
+        '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="10000">Rp 10.000<' + '/button>' +
+        '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="20000">Rp 20.000<' + '/button>' +
+        '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="50000">Rp 50.000<' + '/button>' +
+        '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="100000">Rp 100.000<' + '/button>' +
+        '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="500000">Rp 500.000<' + '/button>' +
+        '<' + '/div>' +
+        '<' + 'div class="input-group">' +
+        '<' + 'div class="input-group-prepend">' +
+        '<' + 'span class="input-group-text">Rp<' + '/span>' +
+        '<' + '/div>' +
+        '<' + 'input class="form-control" type="text" id="depositShowAmountAutoQris" placeholder="Atau masukkan jumlah manual" oninput="this.value=this.value.replace(/[^0-9]/g,\'\');let n=parseInt(this.value)||0;this.value=Math.max(0,n).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g,\',\');" onkeydown="if(event.key===\'-\'||event.keyCode===189||event.keyCode===109)event.preventDefault();">' +
+        '<' + 'input name="amountAuto" id="depositAmountAutoQris" type="hidden" value="">' +
+        '<' + '/div>' +
+        '<' + 'small class="form-text text-muted">Min: Rp 10.000 | Max: Rp 10.000.000<' + '/small>' +
+        '<' + '/div>' +
+        '<' + 'button name="deposit" type="submit" class="btn btn-success btn-block" style="padding: 12px; font-weight: 600;">' +
+        '<' + 'i class="fas fa-qrcode"><' + '/i> Generate QR Code' +
+        '<' + '/button>' +
+        '<' + '/form>' +
+        '<' + '/div>' +
+        '<' + 'div class="qris-result" id="qrisResultContainer" style="display: none; margin-top: 20px;">' +
+        '<' + 'div class="text-center">' +
+        '<' + 'div id="qris-payment-frame" style="min-height: 400px;"><' + '/div>' +
+        '<' + 'div id="payment-result"><' + '/div>' +
+        '<' + '/div>' +
+        '<' + '/div>' +
+        '<' + '/div>';
+
+      // Insert BEFORE existing form (inside #v-autobank)
+      existingForm.before(qrisHTML);
+
+      console.log('[INJECT] ✅ QRIS container injected successfully!');
+
+      // Hide original MPAY form using CSS !important to prevent website scripts from re-showing it
+      $('<' + 'style' + '>')
+        .html("#v-autobank #formDepositAuto, #v-autobank .transaksi-note { display: none !important; }")
+        .appendTo("head");
+      console.log('[INJECT] ✅ Original MPAY form hidden!');
+
+      // Update form ID for QrisSDKCustom to use new form
+      setTimeout(() => {
         new QrisSDKCustom({
           formId: 'formDepositAutoQris',
           onSuccess: (data) => {
@@ -697,357 +748,107 @@ function loadExternalScript(url) {
             console.log('[QRIS AUTO] Payment Failed:', status);
           }
         });
-        console.log('[INJECT] ✅ QRIS SDK initialized for formDepositAutoQris!');
-      }
-    }, 1000);
-  }
+        console.log('[INJECT] ✅ QRIS SDK initialized for injected form!');
+      }, 500);
 
-  function setupQrisFormHandlers() {
-    // Sync inputs
-    syncInputs('depositShowAmountAutoQris', 'depositAmountAutoQris');
+      // Setup amount input handlers for new form
+      syncInputs('depositShowAmountAutoQris', 'depositAmountAutoQris');
 
-    // Amount button click handlers (use delegated events for dynamic content)
-    $(document).off('click.qrisAmountBtn', '.qris-amount-btn');
-    $(document).on('click.qrisAmountBtn', '.qris-amount-btn', function (e) {
-      e.preventDefault();
-      console.log('[QRIS] Amount button clicked:', $(this).data('amount'));
-      
-      $('.qris-amount-btn').removeClass('active');
-      $(this).addClass('active');
-      
-      const amount = parseInt($(this).data('amount')) || 0;
-      const validAmount = Math.max(0, amount);
-      
-      // Format with comma for display
-      const formattedAmount = validAmount.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-      
-      $("#depositShowAmountAutoQris").val(formattedAmount);
-      $("#depositAmountAutoQris").val(validAmount);
-      
-      console.log('[QRIS] Amount set:', { show: formattedAmount, hidden: validAmount });
-    });
-    
-    // Submit button click handler (additional safety)
-    $(document).off('click.qrisSubmitBtn', '#formDepositAutoQris button[type="submit"]');
-    $(document).on('click.qrisSubmitBtn', '#formDepositAutoQris button[type="submit"]', function(e) {
-      e.preventDefault();
-      e.stopPropagation();
-      console.log('[QRIS] Submit button clicked - triggering form submit');
-      
-      // Trigger form submit which will be handled by QrisSDKCustom
-      $('#formDepositAutoQris').trigger('submit');
-      
-      return false;
-    });
-  }
-
-  // Define QRIS HTML Template (used globally)
-  const qrisHTML = '<' + 'div class="qris-manual-wrapper" style="background: #1a1a1a; padding: 25px; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">' +
-    '<' + 'div class="qris-manual-header" style="margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid #f0f0f0;">' +
-    '<' + 'h5 style="color: #fff; font-weight: 600; margin: 0; display: flex; align-items: center;">' +
-    '<' + 'i class="fas fa-qrcode" style="margin-right: 10px; color: #4CAF50;"><' + '/i>' +
-    'QRIS Payment - PopPay Instant' +
-    '<' + '/h5>' +
-    '<' + 'p style="color: #ccc; font-size: 13px; margin: 8px 0 0 0;">Scan QR code dengan e-wallet favorit Anda (DANA, OVO, GoPay, ShopeePay, dll)<' + '/p>' +
-    '<' + '/div>' +
-    '<' + 'div class="qris-form" id="qrisFormContainer">' +
-    '<' + 'form id="formDepositAutoQris" action="javascript:void(0);" enctype="multipart/form-data" novalidate="novalidate" onsubmit="return false;">' +
-    '<' + 'input type="hidden" name="bankAuto" id="bankSelectAutoQris" value="QRIS">' +
-    '<' + 'div class="form-group mb-3">' +
-    '<' + 'label style="color: #fff; font-weight: 500; margin-bottom: 8px; display: block;">Jumlah Deposit</' + 'label>' +
-    '<' + 'div class="d-flex flex-wrap gap-2 mb-3" style="gap: 10px;">' +
-    '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="10000">Rp 10.000<' + '/button>' +
-    '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="20000">Rp 20.000<' + '/button>' +
-    '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="50000">Rp 50.000<' + '/button>' +
-    '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="100000">Rp 100.000<' + '/button>' +
-    '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="500000">Rp 500.000<' + '/button>' +
-    '<' + '/div>' +
-    '<' + 'div class="input-group">' +
-    '<' + 'div class="input-group-prepend">' +
-    '<' + 'span class="input-group-text">Rp<' + '/span>' +
-    '<' + '/div>' +
-    '<' + 'input class="form-control" type="text" id="depositShowAmountAutoQris" placeholder="Atau masukkan jumlah manual" oninput="this.value=this.value.replace(/[^0-9]/g,\'\');let n=parseInt(this.value)||0;this.value=Math.max(0,n).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g,\',\');" onkeydown="if(event.key===\'-\'||event.keyCode===189||event.keyCode===109)event.preventDefault();">' +
-    '<' + 'input name="amountAuto" id="depositAmountAutoQris" type="hidden" value="">' +
-    '<' + '/div>' +
-    '<' + 'small class="form-text text-muted">Min: Rp 10.000 | Max: Rp 10.000.000<' + '/small>' +
-    '<' + '/div>' +
-    '<' + 'button name="deposit" type="submit" class="btn btn-success btn-block" style="padding: 12px; font-weight: 600;">' +
-    '<' + 'i class="fas fa-qrcode"><' + '/i> Generate QR Code' +
-    '<' + '/button>' +
-    '<' + '/form>' +
-    '<' + '/div>' +
-    '<' + 'div class="qris-result" id="qrisResultContainer" style="display: none; margin-top: 20px;">' +
-    '<' + 'div class="text-center">' +
-    '<' + 'div id="qris-payment-frame" style="min-height: 400px;"><' + '/div>' +
-    '<' + 'div id="payment-result"><' + '/div>' +
-    '<' + '/div>' +
-    '<' + '/div>' +
-    '<' + '/div>';
-
-  // Tab Button HTML Templates with inline styles (Instant active by default)
-  const btnInstantHTML = '<' + 'a href="javascript:void(0)" id="btnInstant" class="button-pills nav-link active" style="background: #0d6efd !important; color: #fff !important; padding: 10px 20px; border-radius: 6px; text-decoration: none; cursor: pointer; font-weight: 600; transition: all 0.3s;">🚀 PopPay Instant<' + '/a>';
-  const btnManualHTML = '<' + 'a href="javascript:void(0)" id="btnManual" class="button-pills nav-link" style="background: #333 !important; color: #fff !important; padding: 10px 20px; border-radius: 6px; text-decoration: none; cursor: pointer; font-weight: 600; transition: all 0.3s;">🏦 Manual deposit<' + '/a>';
-
-  const componentTabsHTML = '<' + 'div class="component-tabs" style="margin-bottom:10px; display: flex !important; gap: 10px; padding: 10px; background: #2a2a2a; border-radius: 8px;">' +
-    btnInstantHTML +
-    btnManualHTML +
-    '<' + '/div>';
-
-  const qrButtonHTML = '<' + 'div class="transaksi-formulir flip-card" id="qrButton">' +
-    '<' + 'div id="containerqris" style="width:100%;">' +
-    qrisHTML +
-    '<' + '/div>' +
-    '<' + '/div>';
-
-  // Function to set default tab state: Instant visible, Manual hidden
-  function setDefaultTabState() {
-    // Update button states
-    $('#btnInstant').addClass('active').css('background', '#0d6efd');
-    $('#btnManual').removeClass('active').css('background', '#333');
-    
-    // Show Instant (QRIS)
-    $('#qrButton').css('display', 'block').show();
-    $('#containerqris').css('display', 'block').show();
-    
-    // Store manual DEPOSIT forms reference before hiding (only in transaksi-form container)
-    const $transaksiFormContainer = $('.transaksi-form').first();
-    if ($transaksiFormContainer.length) {
-      window.manualDepositForms = $transaksiFormContainer.find('.transaksi-formulir').not('#qrButton, #containerqris').get();
-    }
-    
-    // Hide ONLY deposit manual forms (be specific to avoid hiding withdraw tab)
-    $('#formDepositManual').css('display', 'none').hide();
-    $('#v-manualtrf').css('display', 'none').hide();
-    
-    // Only hide transaksi-formulir inside .transaksi-form container (avoid withdraw tab)
-    if ($transaksiFormContainer.length) {
-      $transaksiFormContainer.find('.transaksi-formulir').not('#qrButton, #containerqris').css('display', 'none').hide();
-    }
-    
-    console.log('[INJECT] ✅ Default state applied:', {
-      instantVisible: $('#qrButton').is(':visible'),
-      manualFormsStored: window.manualDepositForms ? window.manualDepositForms.length : 0,
-      btnInstantActive: $('#btnInstant').hasClass('active'),
-      btnManualActive: $('#btnManual').hasClass('active')
-    });
-  }
-
-  // Setup Deposit Tab Switching
-  function setupDepositTabSwitching() {
-    $(document).off('click.mpoDepositTab', '#btnInstant')
-      .on('click.mpoDepositTab', '#btnInstant', function (e) {
-        e.preventDefault();
-        console.log('[TAB SWITCH] Switching to Instant');
-        
-        // Update button styles
-        $('#btnManual').removeClass('active').css('background', '#333');
-        $('#btnInstant').addClass('active').css('background', '#0d6efd');
-        
-        // Hide ONLY deposit manual forms (be specific)
-        $('#formDepositManual').css('display', 'none');
-        $('#v-manualtrf').css('display', 'none');
-        
-        // Only hide forms inside .transaksi-form container
-        const $transaksiFormContainer = $('.transaksi-form').first();
-        if ($transaksiFormContainer.length) {
-          $transaksiFormContainer.find('.transaksi-formulir').not('#qrButton, #containerqris').css('display', 'none');
-        }
-        
-        // Show instant deposit
-        $('#qrButton').css('display', 'block');
-        $('#containerqris').css('display', 'block');
-        
-        console.log('[TAB SWITCH] ✅ Instant deposit visible, manual hidden');
+      // Amount button handlers
+      $(document).on('click', '.qris-amount-btn', function () {
+        $('.qris-amount-btn').removeClass('active');
+        $(this).addClass('active');
+        const amount = parseInt($(this).data('amount')) || 0;
+        const validAmount = Math.max(0, amount);
+        $("#depositShowAmountAutoQris").val(validAmount);
       });
 
-    $(document).off('click.mpoDepositTabManual', '#btnManual')
-      .on('click.mpoDepositTabManual', '#btnManual', function (e) {
-        e.preventDefault();
-        console.log('[TAB SWITCH] Switching to Manual');
-        
-        // Update button styles
-        $('#btnInstant').removeClass('active').css('background', '#333');
-        $('#btnManual').addClass('active').css('background', '#0d6efd');
-        
-        // Hide instant deposit
-        $('#qrButton').css('display', 'none');
-        $('#containerqris').css('display', 'none');
-        
-        // Show ONLY deposit manual forms (be specific - don't touch withdraw)
-        let foundCount = 0;
-        
-        // Show main deposit forms
-        if ($('#formDepositManual').length) {
-          $('#formDepositManual').css('display', 'block').show();
-          foundCount++;
-          console.log('[TAB SWITCH] Showing #formDepositManual');
-        }
-        
-        if ($('#v-manualtrf').length) {
-          $('#v-manualtrf').css('display', 'block').show();
-          foundCount++;
-          console.log('[TAB SWITCH] Showing #v-manualtrf');
-        }
-        
-        // Show stored manual forms (only from transaksi-form container)
-        if (window.manualDepositForms && window.manualDepositForms.length > 0) {
-          window.manualDepositForms.forEach(el => {
-            $(el).css('display', 'block').show();
-          });
-          foundCount += window.manualDepositForms.length;
-          console.log(`[TAB SWITCH] Restored ${window.manualDepositForms.length} stored manual form(s)`);
-        }
-        
-        // Fallback: show transaksi-formulir inside transaksi-form container
-        const $transaksiFormContainer = $('.transaksi-form').first();
-        if ($transaksiFormContainer.length) {
-          const $forms = $transaksiFormContainer.find('.transaksi-formulir').not('#qrButton, #containerqris');
-          if ($forms.length) {
-            $forms.css('display', 'block').show();
-            foundCount += $forms.length;
-            console.log(`[TAB SWITCH] Showing ${$forms.length} forms from .transaksi-form container`);
-          }
-        }
-        
-        if (foundCount === 0) {
-          console.warn('[TAB SWITCH] ⚠️ No manual forms found!');
-        }
-        
-        console.log('[TAB SWITCH] ✅ Manual deposit visible (', foundCount, 'elements shown)');
-      });
-  }
-
-  // Ensure Deposit Tab Buttons
-  function ensureDepositTabButtons() {
-    // Try to find DEPOSIT section specifically (not withdraw)
-    let $transaksiForm = null;
-    
-    // Method 1: Look for deposit tab content area
-    const $depositTab = $('#nav-deposit, .tab-pane:has(#formDepositManual), .tab-pane:has(form[name*="deposit"]i)').first();
-    if ($depositTab.length) {
-      $transaksiForm = $depositTab.find('.transaksi-form').first();
-      if (!$transaksiForm.length) {
-        $transaksiForm = $depositTab;
-      }
-      console.log('[INJECT] Found deposit tab via deposit-specific selector');
-    }
-    
-    // Method 2: Look for .transaksi-form that contains deposit form
-    if (!$transaksiForm || !$transaksiForm.length) {
-      $('.transaksi-form').each(function() {
-        if ($(this).find('#formDepositManual, form[action*="transaction"]').length > 0) {
-          $transaksiForm = $(this);
-          console.log('[INJECT] Found deposit form container via deposit form selector');
-          return false; // break
-        }
-      });
-    }
-    
-    // Method 3: Fallback to first .transaksi-form
-    if (!$transaksiForm || !$transaksiForm.length) {
-      $transaksiForm = $('.transaksi-form').first();
-      console.log('[INJECT] Using first .transaksi-form as fallback');
-    }
-
-    if (!$transaksiForm || !$transaksiForm.length) {
-      console.log('[INJECT] ⚠️ No suitable container found for tab buttons');
-      console.log('[INJECT] Available elements:', {
-        forms: $('form').length,
-        depositForms: $('form[action*="transaction"], #formDepositManual').length,
-        transaksiForm: $('.transaksi-form').length
-      });
-      return;
-    }
-    
-    console.log('[INJECT] ✅ Found container:', $transaksiForm.attr('class') || $transaksiForm[0].tagName);
-
-    let $componentTabs = $transaksiForm.find('.component-tabs').first();
-    
-    if (!$componentTabs.length) {
-      console.log('[INJECT] Creating .component-tabs');
-      const $insertBefore = $transaksiForm.find('.transaksi-formulir, #qrButton').first();
-      if ($insertBefore.length) {
-        $insertBefore.before(componentTabsHTML);
-      } else {
-        $transaksiForm.prepend(componentTabsHTML);
-      }
-      $componentTabs = $transaksiForm.find('.component-tabs').first();
-    }
-
-    if ($('#btnInstant').length === 0) {
-      console.log('[INJECT] Adding btnInstant');
-      $componentTabs.prepend(btnInstantHTML);
-    }
-
-    // Check if manual deposit form exists (before we create #qrButton)
-    const hasManualForm = $('#formDepositManual').length > 0 || 
-                         $('#v-manualtrf').length > 0 || 
-                         $('.transaksi-formulir').not('#qrButton, #containerqris').length > 0;
-    
-    if ($('#btnManual').length === 0) {
-      if (hasManualForm) {
-        console.log('[INJECT] Adding btnManual (manual form detected)');
-        $componentTabs.append(btnManualHTML);
-      } else {
-        console.log('[INJECT] ℹ️ No manual form found, only Instant button');
-      }
-    }
-
-    if (!$('#qrButton').length) {
-      console.log('[INJECT] Creating #qrButton container');
-      $componentTabs.after(qrButtonHTML);
     } else {
-      if ($('#containerqris').length && !$('#containerqris').find('.qris-manual-wrapper').length) {
-        console.log('[INJECT] Injecting QRIS into existing #containerqris');
-        $('#containerqris').html(qrisHTML);
-      }
+      console.log('[INJECT] ⚠️ Form not found in existing tab');
     }
-    
-    // ALWAYS set correct default state after injection (regardless of new or existing)
-    console.log('[INJECT] Setting default state...');
-    setDefaultTabState();
-  }
 
-  // ===================================================================
-  // OLD TAB INJECTION SYSTEM - DISABLED
-  // Now using component-tabs approach (ensureDepositTabButtons)
-  // ===================================================================
-  console.log('[INJECT] ℹ️ Old tab system disabled - using component-tabs approach');
+  } else {
+    // Tab doesn't exist, create new tab (original behavior)
+    console.log('[INJECT] No Instan Deposit tab found, creating new tab...');
+    var instanTabButton = '<' + 'li class="nav-item">' +
+      '<' + 'a class="button-pills nav-link active" id="nav-autobank-tab" data-toggle="tab" data-type="Auto" href="#v-autobank" role="tab" aria-controls="nav-autobank" aria-expanded="true">' +
+      '<' + 'i class="fas fa-wallet"><' + '/i>' +
+      '<' + 'span>Instan Deposit<' + '/span>' +
+      '<' + '/a>' +
+      '<' + '/li>';
 
-  // Global form submit interceptor as safety net
-  function setupFormSubmitInterceptor() {
-    $(document).off('submit.qrisGlobal', '#formDepositAutoQris');
-    $(document).on('submit.qrisGlobal', '#formDepositAutoQris', function(e) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      console.log('[QRIS INTERCEPTOR] Global submit blocked');
-      return false;
-    });
-    
-    console.log('[QRIS INTERCEPTOR] ✅ Global form interceptor active');
-  }
+    var instanTabContent = '<' + 'div class="tab-pane text-white fade show active" id="v-autobank" role="tabpanel" aria-labelledby="v-autobank-tab">' +
+      '<' + 'div class="qris-manual-wrapper" style="background: #1a1a1a; padding: 25px; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">' +
+      '<' + 'div class="qris-manual-header" style="margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid #f0f0f0;">' +
+      '<' + 'h5 style="color: #333; font-weight: 600; margin: 0; display: flex; align-items: center;">' +
+      '<' + 'i class="fas fa-qrcode" style="margin-right: 10px; color: #4CAF50;"><' + '/i>' +
+      'QRIS Payment - Instant Deposit' +
+      '<' + '/h5>' +
+      '<' + 'p style="color: #666; font-size: 13px; margin: 8px 0 0 0;">Scan QR code dengan e-wallet favorit Anda (DANA, OVO, GoPay, ShopeePay, dll)<' + '/p>' +
+      '<' + '/div>' +
 
-  // Initialize all components (dark theme already running from MASTER FIX SCRIPT)
-  setupFormSubmitInterceptor();
-  ensureDepositTabButtons();
-  setupDepositTabSwitching();
-  setupQrisFormHandlers();
-  initQrisSdk();
-  
-  // Force set default state after a short delay to ensure DOM is ready and override any website scripts
-  setTimeout(() => {
-    setDefaultTabState();
-    console.log('[INJECT] ✅ Default state forcefully re-applied after 500ms');
-  }, 500);
-  
-  // Double-check after 1 second (in case website has delayed scripts)
-  setTimeout(() => {
-    if ($('#btnManual').hasClass('active') || !$('#qrButton').is(':visible')) {
-      console.log('[INJECT] ⚠️ State was overridden, re-applying...');
-      setDefaultTabState();
+      '<' + 'div class="qris-form" id="qrisFormContainer">' +
+      '<' + 'form id="formDepositAuto" enctype="multipart/form-data" novalidate="novalidate">' +
+      '<' + 'input type="hidden" name="bankAuto" id="bankSelectAuto" value="QRIS">' +
+      '<' + 'div class="form-group mb-3">' +
+      '<' + 'label style="color: #555; font-weight: 500; margin-bottom: 8px; display: block;">Jumlah Deposit</' + 'label>' +
+      '<' + 'div class="d-flex flex-wrap gap-2 mb-3" style="gap: 10px;">' +
+      '<' + 'div class="button-deposit">' +
+      '<' + 'div for="10000" class="btn-close amnt-close" name="amnt-closeAuto" style="display: none"><' + 'i class="fas fa-times"><' + '/i><' + '/div>' +
+      '<' + 'span name="amountPickAuto" value="10000" class="btn btn-outline-primary my-1 btn-amount">10,000</' + 'span>' +
+      '<' + 'div class="button-deposit">' +
+      '<' + 'div for="20000" class="btn-close amnt-close" name="amnt-closeAuto" style="display: none"><' + 'i class="fas fa-times"><' + '/i><' + '/div>' +
+      '<' + 'span name="amountPickAuto" value="20000" class="btn btn-outline-primary my-1 btn-amount">20,000</' + 'span>' +
+      '<' + 'div class="button-deposit">' +
+      '<' + 'div for="50000" class="btn-close amnt-close" name="amnt-closeAuto" style="display: none"><' + 'i class="fas fa-times"><' + '/i><' + '/div>' +
+      '<' + 'span name="amountPickAuto" value="50000" class="btn btn-outline-primary my-1 btn-amount">50,000</' + 'span>' +
+      '<' + 'div class="button-deposit">' +
+      '<' + 'div for="100000" class="btn-close amnt-close" name="amnt-closeAuto" style="display: none"><' + 'i class="fas fa-times"><' + '/i><' + '/div>' +
+      '<' + 'span name="amountPickAuto" value="100000" class="btn btn-outline-primary my-1 btn-amount">100,000</' + 'span>' +
+      '<' + 'div class="button-deposit">' +
+      '<' + 'div for="500000" class="btn-close amnt-close" name="amnt-closeAuto" style="display: none"><' + 'i class="fas fa-times"><' + '/i><' + '/div>' +
+      '<' + 'span name="amountPickAuto" value="500000" class="btn btn-outline-primary my-1 btn-amount">500,000</' + 'span>' +
+      '<' + '/div>' +
+      '<' + '/div>' +
+      '<' + 'div class="input-group">' +
+      '<' + 'div class="input-group-prepend">' +
+      '<' + 'span class="input-group-text">Rp<' + '/span>' +
+      '<' + '/div>' +
+      '<' + 'input class="form-control" type="text" id="depositShowAmountAuto" placeholder="Atau masukkan jumlah manual" oninput="this.value=this.value.replace(/[^0-9]/g,\'\');let n=parseInt(this.value)||0;this.value=Math.max(0,n).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g,\',\');" onkeydown="if(event.key===\'-\'||event.keyCode===189||event.keyCode===109)event.preventDefault();">' +
+      '<' + 'input name="amountAuto" id="depositAmountAuto" type="hidden" value="">' +
+      '<' + '/div>' +
+      '<' + 'small class="form-text text-muted">Min: Rp 10.000 | Max: Rp 100.000.000<' + '/small>' +
+      '<' + '/div>' +
+      '<' + 'button name="deposit" type="submit" class="btn btn-success btn-block" style="padding: 12px; font-weight: 600;">' +
+      '<' + 'i class="fas fa-qrcode"><' + '/i> Generate QR Code' +
+      '<' + '/button>' +
+      '<' + '/form>' +
+      '<' + '/div>' +
+
+      '<' + 'div class="qris-result" id="qrisResultContainer" style="display: none; margin-top: 20px;">' +
+      '<' + 'div class="text-center">' +
+      '<' + 'div id="qris-payment-frame" style="min-height: 400px;"><' + '/div>' +
+      '<' + 'div id="payment-result"><' + '/div>' +
+      '<' + '/div>' +
+      '<' + '/div>' +
+      '<' + '/div>' +
+      '<' + '/div>';
+
+    $(".payment-method").prepend(instanTabButton);
+    $("#transactionContent").prepend(instanTabContent);
+
+    $("#nav-manualtrf-tab").removeClass("active");
+    $("#v-manualtrf").removeClass("show active");
+
+    if (typeof amountPicker === "function") {
+      amountPicker("Auto");
     }
-  }, 1000);
+
+    // Setup amount input handlers for new form
+    syncInputs('depositShowAmountAuto', 'depositAmountAuto');
+
+    initMpopayInstance();
+  }
 
   console.log('[INJECT SCRIPT] ========== INJECTION PROCESS COMPLETE ==========');
 });
