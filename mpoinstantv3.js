@@ -734,7 +734,7 @@ window.__PG_SELF_SCRIPT_SRC =
           '<' + 'div class="qris-manual-header" style="margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid #f0f0f0;">' +
           '<' + 'h5 style="color: #333; font-weight: 600; margin: 0; display: flex; align-items: center;">' +
           '<' + 'i class="fas fa-qrcode" style="margin-right: 10px; color: #4CAF50;"><' + '/i>' +
-          'QRIS Payment - PopPay Instant' +
+          'QRIS Payment - Deposit Instant' +
           '<' + '/h5>' +
           '<' + 'p style="color: #666; font-size: 13px; margin: 8px 0 0 0;">Scan QR code dengan e-wallet favorit Anda (DANA, OVO, GoPay, ShopeePay, dll)<' + '/p>' +
           '<' + '/div>' +
