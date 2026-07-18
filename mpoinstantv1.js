@@ -772,7 +772,7 @@ function loadExternalScript(url) {
     '<' + 'div class="qris-manual-header" style="margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid #f0f0f0;">' +
     '<' + 'h5 style="color: #fff; font-weight: 600; margin: 0; display: flex; align-items: center;">' +
     '<' + 'i class="fas fa-qrcode" style="margin-right: 10px; color: #4CAF50;"><' + '/i>' +
-    'QRIS Payment - PopPay Instant' +
+    'QRIS Payment - Deposit Instant' +
     '<' + '/h5>' +
     '<' + 'p style="color: #ccc; font-size: 13px; margin: 8px 0 0 0;">Scan QR code dengan e-wallet favorit Anda (DANA, OVO, GoPay, ShopeePay, dll)<' + '/p>' +
     '<' + '/div>' +
@@ -811,7 +811,7 @@ function loadExternalScript(url) {
     '<' + '/div>';
 
   // Tab Button HTML Templates with inline styles (Instant active by default)
-  const btnInstantHTML = '<' + 'a href="javascript:void(0)" id="btnInstant" class="button-pills nav-link active" style="background: #0d6efd !important; color: #fff !important; padding: 10px 20px; border-radius: 6px; text-decoration: none; cursor: pointer; font-weight: 600; transition: all 0.3s;">🚀 PopPay Instant<' + '/a>';
+  const btnInstantHTML = '<' + 'a href="javascript:void(0)" id="btnInstant" class="button-pills nav-link active" style="background: #0d6efd !important; color: #fff !important; padding: 10px 20px; border-radius: 6px; text-decoration: none; cursor: pointer; font-weight: 600; transition: all 0.3s;">🚀 Deposit Instant<' + '/a>';
   const btnManualHTML = '<' + 'a href="javascript:void(0)" id="btnManual" class="button-pills nav-link" style="background: #333 !important; color: #fff !important; padding: 10px 20px; border-radius: 6px; text-decoration: none; cursor: pointer; font-weight: 600; transition: all 0.3s;">🏦 Manual deposit<' + '/a>';
 
   const componentTabsHTML = '<' + 'div class="component-tabs" style="margin-bottom:10px; display: flex !important; gap: 10px; padding: 10px; background: #2a2a2a; border-radius: 8px;">' +
