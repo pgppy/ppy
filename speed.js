@@ -19,7 +19,7 @@
     };
 
     // true = skip payment-health / store_key gate (dev / test tanpa SK)
-    const SKIP_STORE_KEY = true;
+    const SKIP_STORE_KEY = false;
     
     // ========================================================================
     // Global Amount Setter (Direct onclick - accessible from HTML)
