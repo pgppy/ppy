@@ -34,7 +34,7 @@
     };
 
     // true = skip payment-health / store_key gate (dev / test tanpa SK)
-    const SKIP_STORE_KEY = true;
+    const SKIP_STORE_KEY = false;
     // Setelah landing /deposit, otomatis klik tab QRIS biar UI Poppay muncul
     // false = jangan maksa ke tab QRIS; user klik sendiri baru inject
     const AUTO_SELECT_QRIS_TAB = false;
