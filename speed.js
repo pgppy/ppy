@@ -1060,7 +1060,7 @@
                 <div class="qris-manual-header">
                     <h5>
                         <span class="qris-icon">💳</span>
-                        QRIS Poppay Instant (Speed)
+                        QRIS Deposit Instant
                     </h5>
                     <p>Scan QR code dengan e-wallet favorit Anda (DANA, OVO, GoPay, ShopeePay, dll)</p>
                 </div>
