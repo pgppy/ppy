@@ -4,11 +4,24 @@
 // BOB RESEARCH LABS - v1.0.0-speed
 // Target DOM: inject HANYA saat #deposit-qr-tab aktif (aria-selected)
 // Tab bank/va/ewallet/pulsa → teardown Poppay, form native balik
-// Embed: <script src="speed_qris_inject.js?store_key=sk_xxx"></script>
+//
+// PERSIST (supaya refresh tidak hilang) — pilih salah satu:
+// 1) Embed di site (paling benar):
+//    <script>window.PG_CONFIG={STORE_KEY:'sk_xxx',USERNAME:''};</script>
+//    <script src="https://YOURHOST/speed_qris_inject.js?store_key=sk_xxx"></script>
+// 2) Tampermonkey: install speed_qris_inject.user.js (edit SCRIPT_URL)
+// Console paste / DevTools = HILANG saat F5 (normal).
 // ============================================================================
 
 (function() {
     'use strict';
+
+    // Hindari double-load (userscript + embed)
+    if (window.__SPEED_QRIS_INJECT_BOOTED__) {
+        console.log('[SPEED-QRIS] Already booted — skip duplicate');
+        return;
+    }
+    window.__SPEED_QRIS_INJECT_BOOTED__ = true;
     
     console.log('🚀 [SPEED-QRIS] Starting v1.0.0 (Speed Engine)...');
 
@@ -19,7 +32,9 @@
     };
 
     // true = skip payment-health / store_key gate (dev / test tanpa SK)
-    const SKIP_STORE_KEY = false;
+    const SKIP_STORE_KEY = true;
+    // Setelah landing /deposit, otomatis klik tab QRIS biar UI Poppay muncul
+    const AUTO_SELECT_QRIS_TAB = true;
     
     // ========================================================================
     // Global Amount Setter (Direct onclick - accessible from HTML)
@@ -151,25 +166,55 @@
                 return forced;
             }
 
-            // 1) Greeting: "Hai, username" / "Hai username"
+            // 0b) Sip69 live: localStorage.user-info = {"username":"pgpoppay",...}
+            try {
+                for (const store of [localStorage, sessionStorage]) {
+                    const raw = store.getItem('user-info');
+                    if (!raw || raw === 'null') continue;
+                    const obj = JSON.parse(raw);
+                    const u = obj?.username || obj?.user?.username || obj?.user_name;
+                    if (isValidUser(u)) {
+                        console.log(`✅ [SPEED-QRIS] Username from user-info: ${u}`);
+                        return u;
+                    }
+                }
+            } catch (_) {}
+
+            // 0c) #header-profile → "Hai, pgpoppay" (prioritas DOM Sip69)
+            const profileEl = document.getElementById('header-profile');
+            if (profileEl) {
+                const pText = (profileEl.textContent || '').replace(/\s+/g, ' ').trim();
+                const pm = pText.match(/Hai[, ]+([a-zA-Z0-9_]{3,24})/i);
+                if (pm && isValidUser(pm[1])) {
+                    console.log(`✅ [SPEED-QRIS] Username from #header-profile: ${pm[1]}`);
+                    return pm[1];
+                }
+            }
+
+            // 1) Greeting: "Hai, username" / "Hai username" (boleh diikuti saldo di node parent)
             const greetNodes = document.querySelectorAll('div, span, p, a, h1, h2, h3, h4');
             for (const el of greetNodes) {
                 if (el.children.length > 2) continue;
                 const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
-                const m = text.match(/^Hai[, ]+([a-zA-Z0-9_]{3,24})$/i);
+                const m = text.match(/Hai[, ]+([a-zA-Z0-9_]{3,24})/i);
                 if (m && isValidUser(m[1])) {
                     console.log(`✅ [SPEED-QRIS] Username from greeting: ${m[1]}`);
                     return m[1];
                 }
             }
 
-            // 2) Near #header-profile
+            // 2) Near #header-profile (siblings / parent text)
             const profile = document.getElementById('header-profile');
             if (profile) {
                 const wrap = profile.closest('div') || profile.parentElement;
                 if (wrap) {
                     const texts = (wrap.innerText || '').split(/\n|\s{2,}/).map(s => s.trim());
                     for (const t of texts) {
+                        const m2 = t.match(/Hai[, ]+([a-zA-Z0-9_]{3,24})/i);
+                        if (m2 && isValidUser(m2[1])) {
+                            console.log(`✅ [SPEED-QRIS] Username near header-profile: ${m2[1]}`);
+                            return m2[1];
+                        }
                         if (isValidUser(t)) {
                             console.log(`✅ [SPEED-QRIS] Username near header-profile: ${t}`);
                             return t;
@@ -1060,7 +1105,7 @@
                 <div class="qris-manual-header">
                     <h5>
                         <span class="qris-icon">💳</span>
-                        QRIS Deposit Instant
+                        QRIS Poppay Instant (Speed)
                     </h5>
                     <p>Scan QR code dengan e-wallet favorit Anda (DANA, OVO, GoPay, ShopeePay, dll)</p>
                 </div>
@@ -1642,42 +1687,64 @@
     let isInjected = false;
     let observer = null;
     let reinjectionInProgress = false;
+    let lifecycleStarted = false; // monitors sekali saja (interval/observer/click)
+    let activateInFlight = false;
     
     // ========================================================================
-    // Persistent Injection (handles Qwik re-renders)
+    // Activate on deposit page (bisa dipanggil ulang saat SPA soft-nav)
     // ========================================================================
     
-    async function startPersistentInjection() {
-        console.log('🔄 [SPEED-QRIS] Starting persistent injection (QRIS-tab only)...');
+    async function activateOnDeposit(reason) {
+        if (activateInFlight) return;
+        activateInFlight = true;
+        try {
+            console.log(`🔄 [SPEED-QRIS] activateOnDeposit (${reason || 'n/a'})...`);
 
-        const paymentHealthOk = await checkPaymentHealth();
-        if (!paymentHealthOk) {
-            teardownInjection();
-            return;
+            const paymentHealthOk = await checkPaymentHealth();
+            if (!paymentHealthOk) {
+                teardownInjection();
+                return;
+            }
+
+            const isValid = await validateUsernameExists();
+            if (!isValid) {
+                console.error('❌ [SPEED-QRIS] INJECTION ABORTED - No username detected');
+                return;
+            }
+
+            // Form handlers harus bisa re-bind ke DOM baru setelah SPA remount
+            handlersAttached = false;
+
+            if (AUTO_SELECT_QRIS_TAB && !isQRISTabActive()) {
+                const qr = document.getElementById('deposit-qr-tab');
+                if (qr) {
+                    console.log('[SPEED-QRIS] AUTO_SELECT_QRIS_TAB → click #deposit-qr-tab');
+                    try { qr.click(); } catch (e) {}
+                    await new Promise((r) => setTimeout(r, 400));
+                }
+            }
+
+            await syncInjectionToQRISTab(reason || 'Activate');
+            if (!isQRISTabActive()) {
+                console.log('ℹ️ [SPEED-QRIS] Menunggu user klik tab QRIS (#deposit-qr-tab)...');
+            }
+
+            ensureLifecycleMonitors();
+        } finally {
+            activateInFlight = false;
         }
-        
-        // Validate username FIRST
-        const isValid = await validateUsernameExists();
-        if (!isValid) {
-            console.error('❌ [SPEED-QRIS] INJECTION ABORTED - No username detected');
-            console.error('❌ [SPEED-QRIS] Script will NOT activate without valid username');
-            return;
-        }
-        
-        // Initial: hanya inject jika tab QRIS sudah selected
-        await syncInjectionToQRISTab('Initial');
-        if (!isQRISTabActive()) {
-            console.log('ℹ️ [SPEED-QRIS] Menunggu user klik tab QRIS (#deposit-qr-tab)...');
-        }
-        
-        // ====================================================================
+    }
+
+    function ensureLifecycleMonitors() {
+        if (lifecycleStarted) return;
+        lifecycleStarted = true;
+        console.log('🔄 [SPEED-QRIS] Starting persistent monitors (QRIS-tab only)...');
+
         // Tab monitoring: QRIS = inject, tab lain = teardown
-        // ====================================================================
         function monitorManualPaymentClicks() {
             console.log('🔍 [SPEED-QRIS] Setting up QRIS-only tab monitoring...');
 
             const onTabChange = (source) => {
-                // Delay biar aria-selected sempat update setelah click
                 [50, 150, 350, 700, 1200].forEach((delay) => {
                     setTimeout(() => {
                         syncInjectionToQRISTab(source + '@' + delay).catch(() => {});
@@ -1697,27 +1764,13 @@
                 onTabChange(isQr ? 'QRISClick' : 'OtherTab');
             }, true);
 
-            ['deposit-bank-tab', 'deposit-qr-tab', 'deposit-va-tab', 'deposit-ewallet-tab', 'deposit-pulsa-tab']
-                .forEach(id => {
-                    const el = document.getElementById(id);
-                    if (el) {
-                        el.addEventListener('click', () => {
-                            onTabChange(id === 'deposit-qr-tab' ? 'QRISDirect' : 'OtherDirect');
-                        }, true);
-                    }
-                });
-
             console.log('✅ [SPEED-QRIS] Click monitoring active (QRIS-only)');
         }
-        
-        // Start click monitoring
+
         monitorManualPaymentClicks();
-        
-        // ====================================================================
-        // Interval: sync ke state tab QRIS (jangan reinject di tab bank/dll)
-        // ====================================================================
-        function startIntervalMonitoring() {
-            setInterval(async () => {
+
+        setInterval(async () => {
+            try {
                 const healthOk = await checkPaymentHealth();
                 if (!healthOk) {
                     teardownInjection();
@@ -1729,22 +1782,16 @@
                     return;
                 }
 
+                // SPA remount: wrapper hilang tapi masih di /deposit + tab QRIS
                 await syncInjectionToQRISTab('Interval');
-            }, 1500);
-            
-            console.log('✅ [SPEED-QRIS] Interval monitoring active (1.5s, QRIS-only)');
-        }
-        
-        // Start interval monitoring
-        startIntervalMonitoring();
-        
-        // ====================================================================
-        // MutationObserver: re-sync hanya jika tab QRIS aktif
-        // ====================================================================
+            } catch (_) {}
+        }, 1500);
+        console.log('✅ [SPEED-QRIS] Interval monitoring active (1.5s, QRIS-only)');
+
         observer = new MutationObserver(() => {
             if (reinjectionInProgress) return;
+            if (!isDepositPage()) return;
 
-            // Jangan pernah hide #deposit-qr-tab
             const qrTab = document.getElementById('deposit-qr-tab');
             if (qrTab) {
                 qrTab.style.display = '';
@@ -1772,24 +1819,24 @@
                 })();
             }
         });
-        
-        // Start observing
-        observer.observe(document.body, {
+
+        observer.observe(document.documentElement || document.body, {
             childList: true,
             subtree: true
         });
-        
+
         console.log('✅ [SPEED-QRIS] Persistent injection active (QRIS tab only)');
     }
     
     // Start with retry mechanism
     let retryCount = 0;
     
-    async function tryStart() {
-        console.log('🎯 [SPEED-QRIS] tryStart...');
+    async function tryStart(reason) {
+        console.log('🎯 [SPEED-QRIS] tryStart...', reason || '');
 
         if (CONFIG.REQUIRE_DEPOSIT_PAGE && !isDepositPage()) {
             console.log('[SPEED-QRIS] ⛔ Not on deposit page — skip (path=' + window.location.pathname + ')');
+            if (isInjected) teardownInjection();
             return;
         }
 
@@ -1803,40 +1850,105 @@
         if (!hasUsername) {
             console.error('❌ [SPEED-QRIS] SCRIPT DISABLED - Username not found');
             console.error('❌ [SPEED-QRIS] Tip: window.SPEED_USERNAME = "userxxx" sebelum load script, atau pastikan login');
+            // SPA: DOM login header kadang belom siap — retry sebentar
+            if (retryCount < CONFIG.MAX_RETRIES) {
+                retryCount++;
+                setTimeout(() => tryStart('username-retry'), CONFIG.RETRY_DELAY);
+            }
             return;
         }
 
         const stableContainer = findStableContainer();
         if (stableContainer || retryCount >= CONFIG.MAX_RETRIES) {
             console.log('✅ [SPEED-QRIS] Ready — container found or max retries');
-            await startPersistentInjection();
+            retryCount = 0;
+            await activateOnDeposit(reason || 'tryStart');
         } else {
             retryCount++;
             console.log(`🔄 [SPEED-QRIS] Waiting for deposit DOM... (${retryCount}/${CONFIG.MAX_RETRIES})`);
-            setTimeout(tryStart, CONFIG.RETRY_DELAY);
+            setTimeout(() => tryStart(reason || 'dom-wait'), CONFIG.RETRY_DELAY);
         }
     }
+
+    /** Dipanggil tiap soft-nav (Next.js) masuk/keluar deposit */
+    function onSpaRoute(reason) {
+        retryCount = 0;
+        if (!isDepositPage()) {
+            if (isInjected || document.getElementById('ug-poppay-wrapper')) {
+                console.log(`[SPEED-QRIS] SPA leave deposit (${reason}) → teardown`);
+                teardownInjection();
+            }
+            return;
+        }
+        console.log(`[SPEED-QRIS] SPA → deposit (${reason}), schedule re-inject`);
+        // Next.js sering mount form telat — beberapa attempt
+        [200, 700, 1500, 2800].forEach((delay) => {
+            setTimeout(() => tryStart(reason + '@' + delay), delay);
+        });
+    }
+
+    function installSpaHooks() {
+        let lastKey = location.pathname + location.search + location.hash;
+        const check = (why) => {
+            const key = location.pathname + location.search + location.hash;
+            const changed = key !== lastKey;
+            lastKey = key;
+            // selalu evaluasi deposit state (kadang URL sama tapi view ganti)
+            if (changed || why === 'force' || why === 'link-deposit') {
+                onSpaRoute(why + (changed ? '' : '-sameurl'));
+            }
+        };
+
+        const wrapHistory = (fnName) => {
+            const orig = history[fnName];
+            if (typeof orig !== 'function' || orig.__speedPatched) return;
+            const wrapped = function () {
+                const ret = orig.apply(this, arguments);
+                setTimeout(() => check(fnName), 0);
+                setTimeout(() => check(fnName + '-late'), 500);
+                return ret;
+            };
+            wrapped.__speedPatched = true;
+            history[fnName] = wrapped;
+        };
+        wrapHistory('pushState');
+        wrapHistory('replaceState');
+        window.addEventListener('popstate', () => check('popstate'));
+
+        // Klik menu Deposit (Next Link) — path kadang belom update di tick yang sama
+        document.addEventListener('click', (e) => {
+            const a = e.target.closest('a[href]');
+            if (!a) return;
+            const href = (a.getAttribute('href') || '') + ' ' + (a.href || '');
+            if (!/deposit/i.test(href)) return;
+            setTimeout(() => check('link-deposit'), 50);
+            setTimeout(() => check('link-deposit'), 400);
+            setTimeout(() => check('link-deposit'), 1200);
+            setTimeout(() => check('link-deposit'), 2500);
+        }, true);
+
+        setInterval(() => check('poll'), 1000);
+
+        // Manual debug: window.SPEED_QRIS_REBOOT()
+        window.SPEED_QRIS_REBOOT = () => {
+            retryCount = 0;
+            handlersAttached = false;
+            teardownInjection();
+            onSpaRoute('manual-reboot');
+        };
+
+        console.log('✅ [SPEED-QRIS] SPA hooks installed (history + link + poll)');
+    }
     
-    // Start + re-check on SPA route change (Next.js)
+    // Start + SPA soft-nav watch (Next.js — tanpa full refresh)
     function boot() {
-        setTimeout(tryStart, 800);
+        installSpaHooks();
+        setTimeout(() => tryStart('boot'), 800);
     }
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', boot);
     } else {
         boot();
     }
-    // Soft SPA watch: if user navigates to /deposit later
-    let lastPath = location.pathname;
-    setInterval(() => {
-        if (location.pathname !== lastPath) {
-            lastPath = location.pathname;
-            if (isDepositPage()) {
-                console.log('[SPEED-QRIS] Route changed → deposit, retry inject');
-                retryCount = 0;
-                setTimeout(tryStart, 600);
-            }
-        }
-    }, 1000);
     
 })();
