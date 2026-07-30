@@ -783,10 +783,14 @@
         newElement.setAttribute('data-ug-persistent', 'true');
         newElement.setAttribute('data-payment-method', 'qris-poppay');
 
-        // Prevent ALL event bubbling from this container
+        // Prevent event bubbling ONLY from non-interactive elements (NOT buttons/inputs)
         newElement.addEventListener('click', function (e) {
-            e.stopPropagation();
-            e.stopImmediatePropagation();
+            // Allow clicks on buttons, inputs, and interactive elements
+            const interactive = e.target.closest('button, input, select, a, [role="button"]');
+            if (!interactive) {
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+            }
         }, true);
 
         // Prevent wrapper from being removed (HARDCORE!)
