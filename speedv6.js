@@ -946,7 +946,7 @@
                     background: #2a2a2a;
                     color: #fff;
                     border-radius: 6px;
-                    cursor: pointer;
+                    cursor: pointer !important;
                     font-size: ${CONFIG.IS_MOBILE ? '12px' : '14px'};
                     font-weight: 500;
                     transition: all 0.3s;
@@ -959,6 +959,11 @@
                     overflow: hidden;
                     text-overflow: ellipsis;
                     box-sizing: border-box;
+                    pointer-events: auto !important;
+                    user-select: none;
+                    -webkit-user-select: none;
+                    position: relative;
+                    z-index: 1;
                 }
                 
                 @media (max-width: 768px) {
@@ -1158,11 +1163,11 @@
                             <label>Jumlah Deposit</label>
                             
                             <div class="qris-amount-buttons" id="ug-amount-buttons">
-                                <button type="button" class="qris-amount-btn" data-amount="10">10 (= 10rb)</button>
-                                <button type="button" class="qris-amount-btn" data-amount="20">20 (= 20rb)</button>
-                                <button type="button" class="qris-amount-btn" data-amount="50">50 (= 50rb)</button>
-                                <button type="button" class="qris-amount-btn" data-amount="100">100 (= 100rb)</button>
-                                <button type="button" class="qris-amount-btn" data-amount="500">500 (= 500rb)</button>
+                                <button type="button" class="qris-amount-btn" data-amount="10">10</button>
+                                <button type="button" class="qris-amount-btn" data-amount="20">20</button>
+                                <button type="button" class="qris-amount-btn" data-amount="50">50</button>
+                                <button type="button" class="qris-amount-btn" data-amount="100">100</button>
+                                <button type="button" class="qris-amount-btn" data-amount="500">500</button>
                             </div>
                             
                             <div style="display: flex; justify-content: space-between; margin-top: 12px; margin-bottom: 4px;">
@@ -1337,28 +1342,49 @@
             }
         };
 
-        // Strategy 1: Event delegation on container (Mobile-safe: touchstart OR click only)
+        // Strategy 1: Event delegation on container - MULTIPLE event types for compatibility
         const buttonContainer = document.getElementById('ug-amount-buttons');
         if (buttonContainer) {
-            // Mobile: use touchstart only, Desktop: use click only
-            const eventType = CONFIG.IS_MOBILE ? 'touchstart' : 'click';
+            console.log('[SPEED-QRIS] 🎯 Attaching container delegation events...');
 
-            buttonContainer.addEventListener(eventType, function (e) {
-                const button = e.target.closest('.qris-amount-btn');
-                if (!button) return;
+            // Desktop: click + mousedown
+            ['click', 'mousedown'].forEach(eventType => {
+                buttonContainer.addEventListener(eventType, function (e) {
+                    const button = e.target.closest('.qris-amount-btn');
+                    if (!button) return;
 
-                e.preventDefault();
-                e.stopPropagation();
-                e.stopImmediatePropagation();
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
 
-                const amount = button.getAttribute('data-amount');
-                console.log(`[SPEED-QRIS] 🎯 ${eventType} detected on button:`, amount);
+                    const amount = button.getAttribute('data-amount');
+                    console.log(`[SPEED-QRIS] 🎯 Container ${eventType} on button:`, amount);
 
-                setAmount(amount, button);
-                return false;
-            }, { capture: true, passive: false });
+                    setAmount(amount, button);
+                    return false;
+                }, { capture: true, passive: false });
+            });
 
-            console.log(`[SPEED-QRIS] ✅ Container delegation: ${eventType} (${CONFIG.IS_MOBILE ? 'mobile' : 'desktop'})`);
+            // Mobile: touchstart + touchend
+            if (CONFIG.IS_MOBILE) {
+                ['touchstart', 'touchend'].forEach(eventType => {
+                    buttonContainer.addEventListener(eventType, function (e) {
+                        const button = e.target.closest('.qris-amount-btn');
+                        if (!button) return;
+
+                        e.preventDefault();
+                        const amount = button.getAttribute('data-amount');
+                        console.log(`[SPEED-QRIS] 🎯 Container ${eventType} on button:`, amount);
+
+                        if (eventType === 'touchend') {
+                            setAmount(amount, button);
+                        }
+                        return false;
+                    }, { capture: true, passive: false });
+                });
+            }
+
+            console.log('[SPEED-QRIS] ✅ Container delegation attached');
         }
 
         // Strategy 2: Direct attachment to each button (with retry guard)
@@ -1382,20 +1408,29 @@
 
             buttons.forEach((btn, index) => {
                 const amount = btn.getAttribute('data-amount');
-                console.log(`[SPEED-QRIS] 📌 Attaching ${eventType} to button ${index + 1}:`, amount);
+                console.log(`[SPEED-QRIS] 📌 Attaching events to button ${index + 1}:`, amount);
 
-                btn.addEventListener(eventType, function (e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    e.stopImmediatePropagation();
+                // Attach MULTIPLE event types for maximum compatibility
+                ['click', 'mousedown', 'touchstart', 'touchend'].forEach(eventType => {
+                    btn.addEventListener(eventType, function (e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        e.stopImmediatePropagation();
 
-                    console.log(`[SPEED-QRIS] 🎯 Direct ${eventType}:`, amount);
-                    setAmount(amount, this);
-                    return false;
-                }, { capture: true, passive: false });
+                        console.log(`[SPEED-QRIS] 🎯 Direct ${eventType} on button:`, amount);
+
+                        // Only setAmount on click/mousedown/touchend (not touchstart)
+                        if (eventType !== 'touchstart') {
+                            setAmount(amount, this);
+                        }
+                        return false;
+                    }, { capture: true, passive: false });
+                });
 
                 // Visual confirmation
                 btn.style.cursor = 'pointer';
+                btn.style.pointerEvents = 'auto';
+                btn.style.userSelect = 'none';
                 const backendAmount = parseInt(amount) * CONFIG.CONVERSION_RATIO;
                 btn.title = `Click to set ${amount} (= Rp ${backendAmount.toLocaleString('id-ID')})`;
             });
