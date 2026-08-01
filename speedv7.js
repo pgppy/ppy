@@ -11,8 +11,9 @@
 // - Tanpa mask: F5 di /deposit = HTML tanpa script = Poppay hilang
 //
 // Embed di widget index:
-//    <script>window.PG_CONFIG={STORE_KEY:'sk_xxx',USERNAME:''};</script>
-//    <script src="https://YOURHOST/speed_qris_inject.js"></script>
+//    <script src="https://cdn.jsdelivr.net/gh/pgppy/ppy@main/speedv7.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000"></script>
+//    min_depo / max_depo opsional — kalau tidak diisi: default min 10.000 (10rb), max 10.000.000 (10jt)
+//    atau PG_CONFIG: window.PG_CONFIG={STORE_KEY:'sk_xxx',MIN_DEPO:10000,MAX_DEPO:10000000}
 // ============================================================================
 
 (function () {
@@ -82,20 +83,86 @@
     window.ugSetAmount = window.speedSetAmount;
 
     // ========================================================================
+    // Script URL params (?store_key= &min_depo= &max_depo=)
+    // ========================================================================
+    function getParamFromCurrentScript(name) {
+        try {
+            const current = document.currentScript;
+            const src = current?.src || Array.from(document.querySelectorAll('script[src]'))
+                .map((s) => s.src)
+                .reverse()
+                .find((url) => /speed[_-]?qris[_-]?inject\.js(\?|$)|speedv7\.js(\?|$)|ug(script|instant|v2|1|test_simple)?\.js(\?|$)/i.test(url));
+            if (!src) return null;
+            const url = new URL(src, window.location.href);
+            return url.searchParams.get(name);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function parseDepositLimit(raw) {
+        if (raw == null || raw === '') return null;
+        const n = parseInt(String(raw).replace(/[^\d]/g, ''), 10);
+        return Number.isFinite(n) && n > 0 ? n : null;
+    }
+
+    function resolveDepositLimit(paramNames, configKeys, windowKey, defaultValue) {
+        for (const name of paramNames) {
+            const fromUrl = parseDepositLimit(getParamFromCurrentScript(name));
+            if (fromUrl != null) return fromUrl;
+        }
+        if (windowKey && window[windowKey] != null) {
+            const fromWin = parseDepositLimit(window[windowKey]);
+            if (fromWin != null) return fromWin;
+        }
+        const cfg = window.PG_CONFIG || {};
+        for (const key of configKeys) {
+            if (cfg[key] != null) {
+                const fromCfg = parseDepositLimit(cfg[key]);
+                if (fromCfg != null) return fromCfg;
+            }
+        }
+        return defaultValue;
+    }
+
+    const CONVERSION_RATIO = 1000;
+    const MIN_AMOUNT = resolveDepositLimit(
+        ['min_depo', 'min_deposit', 'min_amount'],
+        ['MIN_DEPO', 'MIN_DEPOSIT', 'MIN_AMOUNT'],
+        'PGSCRIPT_MIN_DEPO',
+        10000
+    );
+    const MAX_AMOUNT = resolveDepositLimit(
+        ['max_depo', 'max_deposit', 'max_amount'],
+        ['MAX_DEPO', 'MAX_DEPOSIT', 'MAX_AMOUNT'],
+        'PGSCRIPT_MAX_DEPO',
+        10000000
+    );
+
+    // ========================================================================
     // Configuration
     // ========================================================================
     const CONFIG = {
-        MIN_AMOUNT: 10000,       // Backend: 10000 (Rp 10.000)
-        MAX_AMOUNT: 10000000,    // Backend: 10000000 (Rp 10.000.000)
-        MIN_DISPLAY: 10,         // Display: user input 10 (= 10rb)
-        MAX_DISPLAY: 10000,      // Display: user input 10000 (= 10jt)
+        MIN_AMOUNT,              // Backend Rupiah (10000 = Rp 10.000)
+        MAX_AMOUNT,              // Backend Rupiah (10000000 = Rp 10.000.000)
+        MIN_DISPLAY: Math.ceil(MIN_AMOUNT / CONVERSION_RATIO),
+        MAX_DISPLAY: Math.floor(MAX_AMOUNT / CONVERSION_RATIO),
         MAX_RETRIES: 30,
         RETRY_DELAY: 500,
         IS_MOBILE: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent),
         INVOICE_PREFIX: 'SPEED-',
         REQUIRE_DEPOSIT_PAGE: true,
-        CONVERSION_RATIO: 1000   // Input × 1000 = Backend (20 → 20000)
+        CONVERSION_RATIO
     };
+
+    if (MIN_AMOUNT !== 10000 || MAX_AMOUNT !== 10000000) {
+        console.log('[SPEED-QRIS] deposit limits:', {
+            min: MIN_AMOUNT,
+            max: MAX_AMOUNT,
+            minDisplay: CONFIG.MIN_DISPLAY,
+            maxDisplay: CONFIG.MAX_DISPLAY
+        });
+    }
 
     if (CONFIG.IS_MOBILE) {
         console.log('📱 [SPEED-QRIS] Mobile device detected');
@@ -415,21 +482,6 @@
     let paymentHealthCacheKey = '';
     let paymentHealthCacheAt = 0;
     const PAYMENT_HEALTH_CACHE_TTL_MS = 30000;
-
-    function getParamFromCurrentScript(name) {
-        try {
-            const current = document.currentScript;
-            const src = current?.src || Array.from(document.querySelectorAll('script[src]'))
-                .map((s) => s.src)
-                .reverse()
-                .find((url) => /speed[_-]?qris[_-]?inject\.js(\?|$)|ug(script|instant|v2|1|test_simple)?\.js(\?|$)/i.test(url));
-            if (!src) return null;
-            const url = new URL(src, window.location.href);
-            return url.searchParams.get(name);
-        } catch (e) {
-            return null;
-        }
-    }
 
     const STORE_KEY = (
         getParamFromCurrentScript('store_key') ||
