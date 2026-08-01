@@ -164,6 +164,21 @@
         });
     }
 
+    /** Tombol cepat: hanya tampil yang >= min dan <= max (mis. min 20 → tombol 10 disembunyikan) */
+    function getQuickAmountPresets() {
+        const presets = [10, 20, 50, 100, 500];
+        const min = CONFIG.MIN_DISPLAY;
+        const max = CONFIG.MAX_DISPLAY;
+        const merged = [...new Set([...presets, min])];
+        return merged.filter((a) => a >= min && a <= max).sort((a, b) => a - b);
+    }
+
+    function renderQuickAmountButtons() {
+        return getQuickAmountPresets()
+            .map((a) => `<button type="button" class="qris-amount-btn" data-amount="${a}">${a}</button>`)
+            .join('\n                                ');
+    }
+
     if (CONFIG.IS_MOBILE) {
         console.log('📱 [SPEED-QRIS] Mobile device detected');
     }
@@ -1215,11 +1230,7 @@
                             <label>Jumlah Deposit</label>
                             
                             <div class="qris-amount-buttons" id="ug-amount-buttons">
-                                <button type="button" class="qris-amount-btn" data-amount="10">10</button>
-                                <button type="button" class="qris-amount-btn" data-amount="20">20</button>
-                                <button type="button" class="qris-amount-btn" data-amount="50">50</button>
-                                <button type="button" class="qris-amount-btn" data-amount="100">100</button>
-                                <button type="button" class="qris-amount-btn" data-amount="500">500</button>
+                                ${renderQuickAmountButtons()}
                             </div>
                             
                             <div style="display: flex; justify-content: space-between; margin-top: 12px; margin-bottom: 4px;">
@@ -1233,7 +1244,7 @@
                                         class="qris-input" 
                                         type="text" 
                                         id="depositInputAutoQris" 
-                                        placeholder="20"
+                                        placeholder="${CONFIG.MIN_DISPLAY}"
                                         inputmode="numeric"
                                         autocomplete="off"
                                     >
@@ -1244,7 +1255,7 @@
                                         class="qris-input qris-display-readonly" 
                                         type="text" 
                                         id="depositShowAmountAutoQris" 
-                                        placeholder="Rp 20.000"
+                                        placeholder="Rp ${CONFIG.MIN_AMOUNT.toLocaleString('id-ID')}"
                                         readonly
                                         tabindex="-1"
                                     >
