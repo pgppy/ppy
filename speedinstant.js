@@ -11,10 +11,10 @@
 // - Tanpa mask: F5 di /deposit = HTML tanpa script = Poppay hilang
 //
 // Embed di widget index:
-//    <script src="https://cdn.jsdelivr.net/gh/pgppy/ppy@main/speedv7.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000&cbid=uuid-bank-qris"></script>
-//    min_depo / max_depo opsional — kalau tidak diisi: default min 10.000 (10rb), max 10.000.000 (10jt)
-//    atau PG_CONFIG: window.PG_CONFIG={STORE_KEY:'sk_xxx',MIN_DEPO:10000,MAX_DEPO:10000000}
-//    SPEED_X_DATA_REFERENCE & SPEED_COMPANY_BANK_ACCOUNT_ID kosong = 100% auto-detect
+//    <script src="https://cdn.jsdelivr.net/gh/pgppy/ppy@main/speedv7.js?store_key=sk_xxx&min_depo=50000&max_depo=10000000&cbid=uuid-bank-qris"></script>
+//    min_depo / max_depo opsional — default min 50.000 (50 coin), max 10.000.000 (Speed API min deposit = 50)
+//    atau PG_CONFIG: window.PG_CONFIG={STORE_KEY:'sk_xxx',MIN_DEPO:50000,MAX_DEPO:10000000}
+//    SPEED_X_DATA_REFERENCE kosong = auto-detect | SPEED_COMPANY_BANK_ACCOUNT_ID / &cbid= WAJIB (no auto)
 // ============================================================================
 
 (function () {
@@ -29,9 +29,8 @@
 
     console.log('🚀 [SPEED-QRIS] Starting v1.2.0 (Speed Engine + pre-deposit)...');
 
-    // Sniff X-Data-Reference + company bank QRIS dari native Speed fetch/XHR sejak page load
+    // Sniff X-Data-Reference dari native Speed fetch/XHR sejak page load
     let _speedXRefSniffed = '';
-    let _speedCompanyBankSniffed = '';
     (function installSpeedNetworkSniffer() {
         if (window.__SPEED_NET_SNIFFER__) return;
         window.__SPEED_NET_SNIFFER__ = true;
@@ -40,40 +39,6 @@
             if (xref && /^[0-9a-f-]{36}$/i.test(String(xref).trim())) {
                 _speedXRefSniffed = String(xref).trim();
             }
-        }
-
-        function rememberCompanyBankFromBody(body) {
-            try {
-                if (!body) return;
-                const text = typeof body === 'string' ? body : JSON.stringify(body);
-                if (!/company-bank|bank_account|"bank"/i.test(text)) return;
-                let parsed = body;
-                if (typeof body === 'string') {
-                    try { parsed = JSON.parse(body); } catch (_) { return; }
-                }
-                const rows = unwrapSpeedList(parsed);
-                for (const acc of rows) {
-                    if (!acc || typeof acc !== 'object') continue;
-                    const bank = acc.bank || {};
-                    const label = [bank.name, bank.code, acc.account_name, acc.account_no, acc.bank_name, acc.name, acc.category, bank.category]
-                        .join(' ').toUpperCase();
-                    if (label.includes('QRIS')) {
-                        _speedCompanyBankSniffed = acc.id;
-                        return;
-                    }
-                }
-            } catch (_) { }
-        }
-
-        function unwrapSpeedList(body) {
-            if (!body || typeof body !== 'object') return [];
-            if (Array.isArray(body)) return body;
-            const inner = body.data !== undefined ? body.data : body;
-            if (Array.isArray(inner)) return inner;
-            if (inner && typeof inner === 'object') {
-                return inner.data || inner.items || inner.rows || [];
-            }
-            return [];
         }
 
         function sniffHeaders(headers) {
@@ -90,16 +55,7 @@
         const origFetch = window.fetch;
         window.fetch = function (...args) {
             try { sniffHeaders((args[1] || {}).headers); } catch (_) { }
-            const p = origFetch.apply(this, args);
-            try {
-                const url = String(args[0] || '');
-                if (url.includes('company-bank-accounts')) {
-                    p.then((res) => {
-                        res.clone().text().then((t) => rememberCompanyBankFromBody(t)).catch(() => { });
-                    }).catch(() => { });
-                }
-            } catch (_) { }
-            return p;
+            return origFetch.apply(this, args);
         };
 
         const origOpen = XMLHttpRequest.prototype.open;
@@ -114,13 +70,6 @@
             return origSetHeader.apply(this, arguments);
         };
         XMLHttpRequest.prototype.send = function () {
-            try {
-                if (this.__speedUrl && this.__speedUrl.includes('company-bank-accounts')) {
-                    this.addEventListener('load', function () {
-                        rememberCompanyBankFromBody(this.responseText);
-                    });
-                }
-            } catch (_) { }
             return origSend.apply(this, arguments);
         };
     })();
@@ -132,9 +81,8 @@
         SPEED_PRE_DEPOSIT: true,
         SPEED_SERVICES_BASE: '/services',
         SPEED_X_DATA_REFERENCE: '',              // kosong = auto (sniff + __NEXT_DATA__ + webpack)
-        SPEED_COMPANY_BANK_ACCOUNT_ID: '',       // kosong = auto; atau &cbid= di script URL
+        SPEED_COMPANY_BANK_ACCOUNT_ID: '',       // WAJIB — &cbid= di script URL atau PG_CONFIG
         SPEED_TRANSACTION_CATEGORY_ID: 2,
-        SPEED_QRIS_BANK_MATCH: 'QRIS',
     };
 
     // true = skip payment-health / store_key gate (dev / test tanpa SK)
@@ -236,6 +184,18 @@
                 return String(fromUrl).trim();
             }
         }
+        try {
+            const pageQs = new URLSearchParams(window.location.search || '');
+            for (const name of paramNames) {
+                const fromPage = pageQs.get(name);
+                if (fromPage != null && String(fromPage).trim()) {
+                    return String(fromPage).trim();
+                }
+            }
+        } catch (_) { }
+        if (window.PGSCRIPT_CBID != null && String(window.PGSCRIPT_CBID).trim()) {
+            return String(window.PGSCRIPT_CBID).trim();
+        }
         const cfg = window.PG_CONFIG || {};
         if (cfg.SPEED_COMPANY_BANK_ACCOUNT_ID != null && String(cfg.SPEED_COMPANY_BANK_ACCOUNT_ID).trim()) {
             return String(cfg.SPEED_COMPANY_BANK_ACCOUNT_ID).trim();
@@ -244,24 +204,26 @@
     }
 
     const CONVERSION_RATIO = 1000;
+    const DEFAULT_MIN_AMOUNT = 50000;   // Speed API: minimum deposit 50 coin = Rp 50.000
+    const DEFAULT_MAX_AMOUNT = 10000000;
     const MIN_AMOUNT = resolveDepositLimit(
         ['min_depo', 'min_deposit', 'min_amount'],
         ['MIN_DEPO', 'MIN_DEPOSIT', 'MIN_AMOUNT'],
         'PGSCRIPT_MIN_DEPO',
-        10000
+        DEFAULT_MIN_AMOUNT
     );
     const MAX_AMOUNT = resolveDepositLimit(
         ['max_depo', 'max_deposit', 'max_amount'],
         ['MAX_DEPO', 'MAX_DEPOSIT', 'MAX_AMOUNT'],
         'PGSCRIPT_MAX_DEPO',
-        10000000
+        DEFAULT_MAX_AMOUNT
     );
 
     // ========================================================================
     // Configuration
     // ========================================================================
     const CONFIG = {
-        MIN_AMOUNT,              // Backend Rupiah (10000 = Rp 10.000)
+        MIN_AMOUNT,              // Backend Rupiah (50000 = input 50 = Rp 50.000)
         MAX_AMOUNT,              // Backend Rupiah (10000000 = Rp 10.000.000)
         MIN_DISPLAY: Math.ceil(MIN_AMOUNT / CONVERSION_RATIO),
         MAX_DISPLAY: Math.floor(MAX_AMOUNT / CONVERSION_RATIO),
@@ -273,13 +235,42 @@
         CONVERSION_RATIO
     };
 
-    if (MIN_AMOUNT !== 10000 || MAX_AMOUNT !== 10000000) {
+    if (MIN_AMOUNT !== DEFAULT_MIN_AMOUNT || MAX_AMOUNT !== DEFAULT_MAX_AMOUNT) {
         console.log('[SPEED-QRIS] deposit limits:', {
             min: MIN_AMOUNT,
             max: MAX_AMOUNT,
             minDisplay: CONFIG.MIN_DISPLAY,
             maxDisplay: CONFIG.MAX_DISPLAY
         });
+    }
+
+    /** Sync depositInputAutoQris → display + hidden (coin ×1000 = Rupiah SDK) */
+    function syncAmountFieldsFromInput() {
+        const amountInput = document.getElementById('depositInputAutoQris');
+        const amountDisplay = document.getElementById('depositShowAmountAutoQris');
+        const amountHidden = document.getElementById('depositAmountAutoQris');
+        if (!amountInput || !amountHidden) return 0;
+
+        const val = String(amountInput.value || '').replace(/\D/g, '');
+        amountInput.value = val;
+
+        if (!val) {
+            if (amountDisplay) amountDisplay.value = '';
+            amountHidden.value = '';
+            return 0;
+        }
+
+        const coin = parseInt(val, 10);
+        if (!Number.isFinite(coin) || coin <= 0) {
+            if (amountDisplay) amountDisplay.value = '';
+            amountHidden.value = '';
+            return 0;
+        }
+
+        const rupiah = coin * CONFIG.CONVERSION_RATIO;
+        if (amountDisplay) amountDisplay.value = 'Rp ' + rupiah.toLocaleString('id-ID');
+        amountHidden.value = String(rupiah);
+        return rupiah;
     }
 
     /** Tombol cepat: hanya tampil yang >= min dan <= max (mis. min 20 → tombol 10 disembunyikan) */
@@ -508,15 +499,17 @@
         X_DATA_REFERENCE: (window.PG_CONFIG?.SPEED_X_DATA_REFERENCE || '').trim(),
         COMPANY_BANK_ID: resolveCompanyBankId(),
         TRANSACTION_CATEGORY_ID: Number(window.PG_CONFIG?.SPEED_TRANSACTION_CATEGORY_ID || 2),
-        QRIS_BANK_MATCH: (window.PG_CONFIG?.SPEED_QRIS_BANK_MATCH || 'QRIS').toUpperCase(),
     };
 
+    const COMPANY_BANK_REQUIRED_MSG = 'Company bank wajib di-set — tambahkan &cbid=uuid di script URL atau PG_CONFIG.SPEED_COMPANY_BANK_ACCOUNT_ID';
+
     if (SPEED_CFG.COMPANY_BANK_ID) {
-        console.log('[SPEED-QRIS] company bank from URL/config:', SPEED_CFG.COMPANY_BANK_ID);
+        console.log('[SPEED-QRIS] company bank (cbid):', SPEED_CFG.COMPANY_BANK_ID);
+    } else if (SPEED_CFG.ENABLED) {
+        console.warn('[SPEED-QRIS] ⚠️ cbid kosong — pre-deposit akan GAGAL sampai &cbid= di-set');
     }
 
     let _speedProfileCache = null;
-    let _speedCompanyBankCache = null;
     let _speedXRefCache = '';
     const SPEED_UUID_RE = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 
@@ -696,44 +689,15 @@
         throw lastErr || new Error('Gagal load player profile');
     }
 
-    async function fetchSpeedCompanyBankId() {
-        if (SPEED_CFG.COMPANY_BANK_ID) return SPEED_CFG.COMPANY_BANK_ID;
-        if (_speedCompanyBankCache) return _speedCompanyBankCache;
-        if (_speedCompanyBankSniffed) {
-            _speedCompanyBankCache = _speedCompanyBankSniffed;
-            console.log('[SPEED-QRIS] company bank auto (sniffed):', _speedCompanyBankCache);
-            return _speedCompanyBankCache;
+    function fetchSpeedCompanyBankId() {
+        const id = (SPEED_CFG.COMPANY_BANK_ID || '').trim();
+        if (!id) {
+            throw new Error(COMPANY_BANK_REQUIRED_MSG);
         }
-
-        const data = await speedApiFetch(
-            'company-bank-accounts?page=1&limit=-1&sort=created_at:asc&bank_category=bank,ewallet,pulsa,crypto',
-            { method: 'GET' }
-        );
-
-        let rows = data;
-        if (rows && typeof rows === 'object' && !Array.isArray(rows)) {
-            rows = rows.data || rows.items || rows.rows || [];
+        if (!/^[0-9a-f-]{36}$/i.test(id)) {
+            throw new Error('cbid tidak valid (harus UUID): ' + id);
         }
-        if (!Array.isArray(rows)) rows = [];
-
-        for (const acc of rows) {
-            const bank = acc.bank || {};
-            const label = [bank.name, bank.code, acc.account_name, acc.account_no, acc.bank_name, acc.name, acc.category, bank.category]
-                .join(' ').toUpperCase();
-            if (label.includes(SPEED_CFG.QRIS_BANK_MATCH)) {
-                _speedCompanyBankCache = acc.id;
-                console.log('[SPEED-QRIS] company bank auto (API):', acc.id, label.trim());
-                return acc.id;
-            }
-        }
-
-        if (rows[0]?.id) {
-            _speedCompanyBankCache = rows[0].id;
-            console.warn('[SPEED-QRIS] QRIS bank tidak ketemu — pakai bank pertama:', rows[0].id);
-            return rows[0].id;
-        }
-
-        throw new Error('Company bank QRIS tidak ditemukan — buka tab deposit dulu atau set PG_CONFIG.SPEED_COMPANY_BANK_ACCOUNT_ID');
+        return id;
     }
 
     async function createSpeedPreDeposit({ username, amount, promotion, playerNote }) {
@@ -1976,9 +1940,8 @@
             const amountInput = document.getElementById('depositInputAutoQris');
             const amountShow = document.getElementById('depositShowAmountAutoQris');
             const amountHidden = document.getElementById('depositAmountAutoQris');
-            const amountBtns = document.querySelectorAll('.qris-amount-btn');
 
-            if (form && amountInput && amountShow && amountHidden && amountBtns.length > 0) {
+            if (form && amountInput && amountShow && amountHidden) {
                 clearInterval(checkElements);
 
                 // Double-check flag before attaching
@@ -2023,34 +1986,15 @@
         const amountDisplay = document.getElementById('depositShowAmountAutoQris');
 
         if (amountInput && amountDisplay && amountHidden) {
-            amountInput.addEventListener('input', function (e) {
-                e.stopPropagation();
-
-                // Remove all non-digits
-                const val = this.value.replace(/\D/g, '');
-
-                // Input: plain integer only
-                this.value = val;
-
-                if (val) {
-                    // Display: formatted Rupiah (Rp 20.000)
-                    const rupiah = parseInt(val) * CONFIG.CONVERSION_RATIO;
-                    amountDisplay.value = 'Rp ' + rupiah.toLocaleString('id-ID');
-                    // Hidden: SDK amount (20000)
-                    amountHidden.value = rupiah;
-
-                    console.log('[SPEED-QRIS] Input:', val, '→ Display:', amountDisplay.value, '→ SDK:', amountHidden.value);
-                } else {
-                    amountDisplay.value = '';
-                    amountHidden.value = '';
-                }
-
-                // Remove active class from buttons when typing
+            const onAmountInput = function (e) {
+                if (e) e.stopPropagation();
+                syncAmountFieldsFromInput();
                 document.querySelectorAll('.qris-amount-btn').forEach(b => b.classList.remove('active'));
-
-                // Check promotion min validation
                 checkPromotionMinAmount();
-            });
+            };
+            amountInput.addEventListener('input', onAmountInput);
+            amountInput.addEventListener('change', onAmountInput);
+            amountInput.addEventListener('blur', onAmountInput);
             console.log('[SPEED-QRIS] ✓ Input handler attached (3-field mode)');
         }
 
@@ -2142,11 +2086,18 @@
             formSubmitInProgress = true;
             console.log('🚀 [SPEED-QRIS] Form submit started (flag set)');
 
-            const amount = parseInt(amountHidden.value); // Already backend units (×1000)
+            // Pastikan hidden field sinkron dari input manual (fix mobile / handler telat)
+            const amount = syncAmountFieldsFromInput() || parseInt(amountHidden.value, 10);
 
-            // Validation (amount already in backend units)
-            if (!amount || amount < CONFIG.MIN_AMOUNT) {
-                alert(`❌ Minimal deposit ${CONFIG.MIN_DISPLAY} (= Rp ${CONFIG.MIN_AMOUNT.toLocaleString('id-ID')})`);
+            // Validation (amount = Rupiah backend, input coin × 1000)
+            if (!amount) {
+                alert(`❌ Masukkan jumlah deposit (min ${CONFIG.MIN_DISPLAY} = Rp ${CONFIG.MIN_AMOUNT.toLocaleString('id-ID')})`);
+                formSubmitInProgress = false;
+                return false;
+            }
+
+            if (amount < CONFIG.MIN_AMOUNT) {
+                alert(`❌ Minimal deposit ${CONFIG.MIN_DISPLAY} (= Rp ${CONFIG.MIN_AMOUNT.toLocaleString('id-ID')})\n\nKamu input ${Math.floor(amount / CONFIG.CONVERSION_RATIO)} (= Rp ${amount.toLocaleString('id-ID')})`);
                 formSubmitInProgress = false;
                 return false;
             }
@@ -2295,7 +2246,7 @@
             } catch (error) {
                 console.error('❌ [SPEED-QRIS] Error:', error);
                 if (restorePoppayFetchHook) restorePoppayFetchHook();
-                alert('Terjadi kesalahan. Silakan coba lagi.');
+                alert(error?.message || 'Terjadi kesalahan. Silakan coba lagi.');
                 resetForm();
                 formSubmitInProgress = false;
             }
