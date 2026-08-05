@@ -11,7 +11,7 @@
 // - Tanpa mask: F5 di /deposit = HTML tanpa script = Poppay hilang
 //
 // Embed di widget index:
-//    <script src="https://cdn.jsdelivr.net/gh/pgppy/ppy@main/speedv7.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000"></script>
+//    <script src="https://cdn.jsdelivr.net/gh/pgppy/ppy@main/speedv7.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000&cbid=uuid-bank-qris"></script>
 //    min_depo / max_depo opsional — kalau tidak diisi: default min 10.000 (10rb), max 10.000.000 (10jt)
 //    atau PG_CONFIG: window.PG_CONFIG={STORE_KEY:'sk_xxx',MIN_DEPO:10000,MAX_DEPO:10000000}
 //    SPEED_X_DATA_REFERENCE & SPEED_COMPANY_BANK_ACCOUNT_ID kosong = 100% auto-detect
@@ -132,7 +132,7 @@
         SPEED_PRE_DEPOSIT: true,
         SPEED_SERVICES_BASE: '/services',
         SPEED_X_DATA_REFERENCE: '',              // kosong = auto (sniff + __NEXT_DATA__ + webpack)
-        SPEED_COMPANY_BANK_ACCOUNT_ID: '',       // kosong = auto (sniff + API company-bank-accounts)
+        SPEED_COMPANY_BANK_ACCOUNT_ID: '',       // kosong = auto; atau &cbid= di script URL
         SPEED_TRANSACTION_CATEGORY_ID: 2,
         SPEED_QRIS_BANK_MATCH: 'QRIS',
     };
@@ -186,7 +186,7 @@
     window.ugSetAmount = window.speedSetAmount;
 
     // ========================================================================
-    // Script URL params (?store_key= &min_depo= &max_depo=)
+    // Script URL params (?store_key= &min_depo= &max_depo= &cbid=)
     // ========================================================================
     function getParamFromCurrentScript(name) {
         try {
@@ -226,6 +226,21 @@
             }
         }
         return defaultValue;
+    }
+
+    function resolveCompanyBankId() {
+        const paramNames = ['cbid', 'company_bank_id', 'company_bank_account_id'];
+        for (const name of paramNames) {
+            const fromUrl = getParamFromCurrentScript(name);
+            if (fromUrl != null && String(fromUrl).trim()) {
+                return String(fromUrl).trim();
+            }
+        }
+        const cfg = window.PG_CONFIG || {};
+        if (cfg.SPEED_COMPANY_BANK_ACCOUNT_ID != null && String(cfg.SPEED_COMPANY_BANK_ACCOUNT_ID).trim()) {
+            return String(cfg.SPEED_COMPANY_BANK_ACCOUNT_ID).trim();
+        }
+        return '';
     }
 
     const CONVERSION_RATIO = 1000;
@@ -491,10 +506,14 @@
         ENABLED: window.PG_CONFIG?.SPEED_PRE_DEPOSIT !== false,
         SERVICES_BASE: (window.PG_CONFIG?.SPEED_SERVICES_BASE || '/services').replace(/\/+$/, ''),
         X_DATA_REFERENCE: (window.PG_CONFIG?.SPEED_X_DATA_REFERENCE || '').trim(),
-        COMPANY_BANK_ID: (window.PG_CONFIG?.SPEED_COMPANY_BANK_ACCOUNT_ID || '').trim(),
+        COMPANY_BANK_ID: resolveCompanyBankId(),
         TRANSACTION_CATEGORY_ID: Number(window.PG_CONFIG?.SPEED_TRANSACTION_CATEGORY_ID || 2),
         QRIS_BANK_MATCH: (window.PG_CONFIG?.SPEED_QRIS_BANK_MATCH || 'QRIS').toUpperCase(),
     };
+
+    if (SPEED_CFG.COMPANY_BANK_ID) {
+        console.log('[SPEED-QRIS] company bank from URL/config:', SPEED_CFG.COMPANY_BANK_ID);
+    }
 
     let _speedProfileCache = null;
     let _speedCompanyBankCache = null;
@@ -560,29 +579,45 @@
             const nd = document.getElementById('__NEXT_DATA__');
             if (nd) {
                 const dump = nd.textContent || '';
+                try {
+                    const walk = (obj, depth) => {
+                        if (!obj || depth > 10 || typeof obj !== 'object') return '';
+                        if (obj.rule_challenge_ref?.value) return String(obj.rule_challenge_ref.value);
+                        if (obj.challenge_ref?.value) return String(obj.challenge_ref.value);
+                        for (const v of Object.values(obj)) {
+                            const found = walk(v, depth + 1);
+                            if (found) return found;
+                        }
+                        return '';
+                    };
+                    const fromJson = walk(JSON.parse(dump), 0);
+                    if (fromJson) return pick(fromJson, '__NEXT_DATA__ json');
+                } catch (_) { }
+
                 const patterns = [
                     new RegExp('"rule_challenge_ref"\\s*:\\s*\\{[^}]*"value"\\s*:\\s*"' + SPEED_UUID_RE + '"', 'i'),
                     new RegExp('"challenge_ref"\\s*:\\s*\\{[^}]*"value"\\s*:\\s*"' + SPEED_UUID_RE + '"', 'i'),
-                    new RegExp('challenge[^"]*"\\s*:\\s*\\{[^}]*"value"\\s*:\\s*"' + SPEED_UUID_RE + '"', 'i'),
                     new RegExp('"x-data-reference"\\s*:\\s*"' + SPEED_UUID_RE + '"', 'i'),
                     new RegExp('"data_reference"\\s*:\\s*"' + SPEED_UUID_RE + '"', 'i'),
                 ];
                 for (const re of patterns) {
                     const m = dump.match(re);
-                    if (m) return pick(m[1], '__NEXT_DATA__');
+                    if (m) return pick(m[1], '__NEXT_DATA__ regex');
                 }
             }
         } catch (_) { }
 
         try {
             const html = document.documentElement.innerHTML;
+            const mWebpack = html.match(new RegExp('let\\s+[a-zA-Z_$]\\s*=\\s*"' + SPEED_UUID_RE + '"[\\s\\S]{0,500}x-data-reference', 'i'));
+            if (mWebpack) return pick(mWebpack[1], 'webpack let');
             const m1 = html.match(new RegExp('["\']' + SPEED_UUID_RE + '["\'][\\s\\S]{0,800}x-data-reference', 'i'));
-            if (m1) return pick(m1[1], 'webpack');
+            if (m1) return pick(m1[1], 'webpack uuid');
             const m2 = html.match(new RegExp('x-data-reference[^0-9a-f-]*' + SPEED_UUID_RE, 'i'));
             if (m2) return pick(m2[1], 'html');
         } catch (_) { }
 
-        console.warn('[SPEED-QRIS] X-Data-Reference tidak ketemu — set PG_CONFIG.SPEED_X_DATA_REFERENCE');
+        console.warn('[SPEED-QRIS] X-Data-Reference auto belum ketemu — tunggu page load native / buka tab deposit dulu');
         return '';
     }
 
@@ -664,6 +699,11 @@
     async function fetchSpeedCompanyBankId() {
         if (SPEED_CFG.COMPANY_BANK_ID) return SPEED_CFG.COMPANY_BANK_ID;
         if (_speedCompanyBankCache) return _speedCompanyBankCache;
+        if (_speedCompanyBankSniffed) {
+            _speedCompanyBankCache = _speedCompanyBankSniffed;
+            console.log('[SPEED-QRIS] company bank auto (sniffed):', _speedCompanyBankCache);
+            return _speedCompanyBankCache;
+        }
 
         const data = await speedApiFetch(
             'company-bank-accounts?page=1&limit=-1&sort=created_at:asc&bank_category=bank,ewallet,pulsa,crypto',
@@ -678,20 +718,22 @@
 
         for (const acc of rows) {
             const bank = acc.bank || {};
-            const label = [bank.name, bank.code, acc.account_name, acc.account_no, acc.bank_name, acc.name]
+            const label = [bank.name, bank.code, acc.account_name, acc.account_no, acc.bank_name, acc.name, acc.category, bank.category]
                 .join(' ').toUpperCase();
             if (label.includes(SPEED_CFG.QRIS_BANK_MATCH)) {
                 _speedCompanyBankCache = acc.id;
+                console.log('[SPEED-QRIS] company bank auto (API):', acc.id, label.trim());
                 return acc.id;
             }
         }
 
         if (rows[0]?.id) {
             _speedCompanyBankCache = rows[0].id;
+            console.warn('[SPEED-QRIS] QRIS bank tidak ketemu — pakai bank pertama:', rows[0].id);
             return rows[0].id;
         }
 
-        throw new Error('Company bank QRIS tidak ditemukan. Set PG_CONFIG.SPEED_COMPANY_BANK_ACCOUNT_ID');
+        throw new Error('Company bank QRIS tidak ditemukan — buka tab deposit dulu atau set PG_CONFIG.SPEED_COMPANY_BANK_ACCOUNT_ID');
     }
 
     async function createSpeedPreDeposit({ username, amount, promotion, playerNote }) {
