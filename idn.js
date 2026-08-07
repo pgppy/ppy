@@ -1,14 +1,14 @@
 // ============================================================================
 // IDN QRIS inject — panel di atas #_hoki-app (native tetap tampil)
 // Embed: /idn_qris_inject.js?store_key=sk_xxx&min_depo=20000&max_depo=10000000
-// Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
+// Health: GET https://script.pg-poppay.com/api/payment-health (+ X-Store-Key)
 // ============================================================================
 
 (function () {
     'use strict';
 
     const LOG = '[IDN-QRIS]';
-    const VERSION = '0.4.5';
+    const VERSION = '0.4.8';
 
     if (window.__IDN_QRIS_INJECT_BOOTED__) {
         if (typeof window.__IDN_QRIS_BOOT__ === 'function') {
@@ -105,8 +105,13 @@
         HEALTH_BASE: (() => {
             let base = (
                 getParam('health_base') ||
+                getParam('api_base') ||
                 window.IDN_PG_HEALTH_BASE ||
-                'https://payment.pg-poppay.com'
+                window.IDN_PGSCRIPT_BASE ||
+                window.IDN_PGSCRIPT_BASE_URL ||
+                window.PGSCRIPT_BASE ||
+                window.PGSCRIPT_BASE_URL ||
+                'https://script.pg-poppay.com'
             ).toString().trim().replace(/\/+$/, '');
             if (location.protocol === 'https:' && base.startsWith('http://')) {
                 base = 'https://' + base.slice(7);
@@ -116,7 +121,7 @@
         HEALTH_PATH: (
             getParam('health_path') ||
             window.IDN_PG_HEALTH_PATH ||
-            'api/payment-health-v2'
+            ''
         ).toString().trim().replace(/^\/+/, ''),
         HEALTH_URL: (() => {
             const direct = (
@@ -318,7 +323,8 @@
 
     function paymentHealthUrl() {
         if (CFG.HEALTH_URL) return CFG.HEALTH_URL;
-        return `${CFG.HEALTH_BASE}/${CFG.HEALTH_PATH}`;
+        const path = CFG.HEALTH_PATH || `${CFG.API_VERSION}/payment-health`;
+        return `${CFG.HEALTH_BASE}/${path}`;
     }
 
     async function checkPaymentHealth(forceRefresh) {
@@ -346,7 +352,7 @@
             paymentHealthCache = ok;
             paymentHealthCacheAt = now;
             logHealthState(ok);
-            debugLog('payment-health-v2', ok ? 'OK' : 'OFF', url, body?.message || '');
+            debugLog('payment-health', ok ? 'OK' : 'OFF', url, body?.message || '');
             return ok;
         } catch (e) {
             paymentHealthCache = false;
