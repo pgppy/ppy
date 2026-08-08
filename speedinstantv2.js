@@ -1732,7 +1732,7 @@
                                 autocomplete="off"
                                 spellcheck="false"
                             >
-                            <small class="qris-input-hint">Akun login — otomatis dari session Speed</small>
+                            <small class="qris-input-hint">Akun login — otomatis dari session</small>
                         </div>
                         
                         <div class="form-group mb-3">
