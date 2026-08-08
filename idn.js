@@ -8,7 +8,8 @@
     'use strict';
 
     const LOG = '[IDN-QRIS]';
-    const VERSION = '0.5.0';
+    const VERSION = '0.5.1';
+    const PANEL_TITLE = 'Instant Auto';
 
     if (window.__IDN_QRIS_INJECT_BOOTED__) {
         if (typeof window.__IDN_QRIS_BOOT__ === 'function') {
@@ -167,11 +168,12 @@
 
     function depositShellReady(wrapper) {
         if (!wrapper) return false;
-        return !!(wrapper.querySelector('#formDeposit') || getHokiRoot());
+        // Tunggu HOKI selesai hijack DOM (rename title native → "Manual Deposit")
+        return !!(getHokiRoot() && wrapper.querySelector('#formDeposit'));
     }
 
     function waitForDepositShell(maxMs) {
-        const limit = maxMs || 8000;
+        const limit = maxMs || 10000;
         return new Promise((resolve) => {
             const start = Date.now();
             const tick = () => {
@@ -184,7 +186,7 @@
                     resolve(getDepositWrapper());
                     return;
                 }
-                setTimeout(tick, 150);
+                setTimeout(tick, 100);
             };
             tick();
         });
@@ -213,10 +215,16 @@
     }
 
     function readUsernameFromDom() {
-        const scopes = [getHokiRoot(), document.querySelector('.content-page__container'), document];
+        const formDeposit = document.getElementById('formDeposit');
+        if (formDeposit) {
+            const inp = formDeposit.querySelector('input[disabled]');
+            const v = (inp?.value || '').trim();
+            if (/^[a-zA-Z0-9_]{3,24}$/.test(v)) return v;
+        }
+        const scopes = [getHokiRoot(), document];
         for (const scope of scopes) {
             if (!scope) continue;
-            const inputs = scope.querySelectorAll('form.form-deposit-withdraw input[disabled], input[disabled]');
+            const inputs = scope.querySelectorAll('input[disabled]');
             for (const inp of inputs) {
                 const v = (inp.value || '').trim();
                 if (/^[a-zA-Z0-9_]{3,24}$/.test(v)) return v;
@@ -250,6 +258,19 @@
         return `
             <style>
                 #idn-qris-inject-wrap { margin-bottom: 12px; }
+                #idn-qris-inject-wrap .idn-qris-panel {
+                    background: var(--idn-qris-bg, #1a1a2e);
+                    border-radius: 0.25rem;
+                    padding: 0 0 12px;
+                }
+                #idn-qris-inject-wrap .idn-qris-panel__title {
+                    color: #fff;
+                    font-size: 16px;
+                    font-weight: 600;
+                    padding: 12px 16px 8px;
+                    margin: 0;
+                }
+                #idn-qris-inject-wrap .idn-qris-panel__body { padding: 0 16px; }
                 #idn-qris-inject-wrap .idn-qris-result { display: none; }
                 #idn-qris-inject-wrap .idn-qris-result.active { display: block; margin-top: 12px; }
                 #idn-qris-payment-frame { min-height: 320px; text-align: center; }
@@ -263,10 +284,10 @@
                 #idn-qris-inject-wrap .idn-qris-success-box h4 { margin: 0 0 8px; font-size: 16px; }
                 #idn-qris-inject-wrap .idn-qris-success-box p { margin: 0; font-size: 14px; }
             </style>
-            <div class="content-page__container content-page__container--bg" id="idn-qris-inject-panel">
-                <div class="pages-box__title pages-box__title--no-pad">DEPOSIT QRIS (INSTANT AUTO)</div>
-                <div class="pages-misc">
-                    <form class="form-deposit-withdraw" id="idnFormDepositQris">
+            <div class="idn-qris-panel" id="idn-qris-inject-panel" data-idn-isolated="true">
+                <div class="idn-qris-panel__title" id="idnQrisPanelTitle">${PANEL_TITLE}</div>
+                <div class="idn-qris-panel__body pages-misc">
+                    <form class="idn-qris-form" id="idnFormDepositQris" autocomplete="off">
                         <input type="hidden" id="idnQrisUsername" value="${username}">
                         <div class="form-row">
                             <div class="form-group">
@@ -289,7 +310,7 @@
                                 <span style="font-size: 12px;">${amountHintText()}</span>
                             </div>
                             <div class="btn-wrapper">
-                                <button type="submit" data-action="submit"
+                                <button type="submit"
                                     class="btn form-deposit-withdraw__btn form-deposit-withdraw__btn--deposit pr-2"
                                     id="idnQrisSubmitBtn">
                                     <span id="idnQrisBtnText">TAMPILKAN QRIS</span>
@@ -303,6 +324,27 @@
                     </div>
                 </div>
             </div>`;
+    }
+
+    let panelGuardStarted = false;
+
+    function restorePanelTitle() {
+        const title = document.getElementById('idnQrisPanelTitle');
+        if (!title) return;
+        if (title.textContent.trim() !== PANEL_TITLE) {
+            title.textContent = PANEL_TITLE;
+            debugLog('title di-restore (HOKI/deposit.js overwrite)');
+        }
+    }
+
+    function startPanelGuard() {
+        if (panelGuardStarted) return;
+        panelGuardStarted = true;
+        const panel = document.getElementById('idn-qris-inject-panel');
+        if (!panel) return;
+        const obs = new MutationObserver(() => restorePanelTitle());
+        obs.observe(panel, { childList: true, subtree: true, characterData: true });
+        setInterval(restorePanelTitle, 1500);
     }
 
     function readInjectAmount() {
@@ -347,6 +389,7 @@
         wrap.remove();
         injectHandlersAttached = false;
         formSubmitInProgress = false;
+        panelGuardStarted = false;
         debugLog('panel hidden', reason || '');
         return true;
     }
@@ -646,8 +689,9 @@
         }
 
         attachInjectHandlers();
+        startPanelGuard();
         ensureInjectOnTop('inject');
-        debugLog('Panel inject → wrapper.prepend (hoki=', !!getHokiRoot(), ')');
+        debugLog('Panel inject → after HOKI, wrapper.prepend');
         return true;
     }
 
