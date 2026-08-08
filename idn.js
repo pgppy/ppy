@@ -1,5 +1,5 @@
 // ============================================================================
-// IDN QRIS inject — panel SELALU paling atas deposit page (independen dari #_hoki-app)
+// IDN QRIS inject — sibling pertama di .content-page__wrapper (HOKI prepend _hoki-app ~1–3s)
 // Embed: /idn_qris_inject.js?store_key=sk_xxx&min_depo=20000&max_depo=10000000
 // Health: GET https://script.pg-poppay.com/api/payment-health (+ X-Store-Key)
 // ============================================================================
@@ -8,7 +8,7 @@
     'use strict';
 
     const LOG = '[IDN-QRIS]';
-    const VERSION = '0.5';
+    const VERSION = '0.5.0';
 
     if (window.__IDN_QRIS_INJECT_BOOTED__) {
         if (typeof window.__IDN_QRIS_BOOT__ === 'function') {
@@ -154,59 +154,62 @@
         return document.getElementById('_hoki-app');
     }
 
-    /** Wrapper deposit page — anchor tetap di sini, tidak mengacu posisi HOKI. */
-    function getDepositPageWrapper() {
-        const selectors = [
-            '.content-page__wrapper',
-            '.content-page',
-            'main .content__wrapper',
-            'main',
-        ];
-        for (const sel of selectors) {
-            const el = document.querySelector(sel);
-            if (el) return el;
-        }
-        return null;
+    /**
+     * Struktur live (setelah HOKI load):
+     *   .content-page__wrapper
+     *     #_hoki-app          ← HOKI prepend (Deposit QRIS Instan Auto Approve)
+     *     .content-page__container ← Manual Deposit + #formDeposit
+     * Target inject: sibling PERTAMA di wrapper (prepend), bukan di dalam Manual Deposit.
+     */
+    function getDepositWrapper() {
+        return document.querySelector('.content-page__wrapper');
     }
 
-    /** Mount point: selalu child pertama di wrapper deposit (di atas HOKI & Manual Deposit). */
-    function findInjectAnchor() {
-        const wrapper = getDepositPageWrapper();
-        if (wrapper) {
-            return {
-                parent: wrapper,
-                before: wrapper.firstElementChild,
-                source: 'content-page__wrapper',
+    function depositShellReady(wrapper) {
+        if (!wrapper) return false;
+        return !!(wrapper.querySelector('#formDeposit') || getHokiRoot());
+    }
+
+    function waitForDepositShell(maxMs) {
+        const limit = maxMs || 8000;
+        return new Promise((resolve) => {
+            const start = Date.now();
+            const tick = () => {
+                const w = getDepositWrapper();
+                if (w && depositShellReady(w)) {
+                    resolve(w);
+                    return;
+                }
+                if (Date.now() - start >= limit) {
+                    resolve(getDepositWrapper());
+                    return;
+                }
+                setTimeout(tick, 150);
             };
-        }
-
-        const selectors = ['.pages-box', 'main .container', '#content'];
-        for (const sel of selectors) {
-            const el = document.querySelector(sel);
-            if (el?.parentNode) {
-                return { parent: el.parentNode, before: el, source: sel };
-            }
-        }
-
-        if (document.body) {
-            return { parent: document.body, before: null, source: 'body' };
-        }
-        return null;
+            tick();
+        });
     }
 
-    /** Pindahkan panel ke paling atas kalau HOKI/DOM insert menggeser posisi. */
+    function dedupeInjectWraps() {
+        const nodes = document.querySelectorAll('#idn-qris-inject-wrap');
+        for (let i = 1; i < nodes.length; i += 1) {
+            nodes[i].remove();
+        }
+    }
+
+    /** prepend ke .content-page__wrapper — jangan insert ke .pages-box / Manual container. */
     function ensureInjectOnTop(reason) {
+        dedupeInjectWraps();
         const wrap = document.getElementById('idn-qris-inject-wrap');
-        const anchor = findInjectAnchor();
-        if (!wrap || !anchor?.parent) return false;
+        const wrapper = getDepositWrapper();
+        if (!wrap || !wrapper) return false;
 
-        const parent = anchor.parent;
-        const first = parent.firstElementChild;
-        if (first === wrap) return false;
-
-        parent.insertBefore(wrap, first);
-        debugLog('panel moved to top', reason || anchor.source);
-        return true;
+        if (wrap.parentElement !== wrapper || wrapper.firstElementChild !== wrap) {
+            wrapper.prepend(wrap);
+            debugLog('panel prepend wrapper', reason || '');
+            return true;
+        }
+        return false;
     }
 
     function readUsernameFromDom() {
@@ -602,6 +605,7 @@
         const existing = document.getElementById('idn-qris-inject-wrap');
         if (existing && !force) {
             attachInjectHandlers();
+            ensureInjectOnTop('existing');
             return true;
         }
 
@@ -611,41 +615,39 @@
             return false;
         }
 
+        const wrapper = await waitForDepositShell();
+        if (!wrapper) {
+            debugLog('content-page__wrapper tidak ada');
+            return false;
+        }
+
         const username = readUsernameFromDom();
         if (!username) {
             debugLog('Username tidak ada — inject diblok');
             return false;
         }
 
-        const anchor = findInjectAnchor();
-        if (!anchor?.parent) {
-            debugLog('Tidak ada anchor inject');
-            return false;
-        }
-
         if (existing) existing.remove();
+        dedupeInjectWraps();
 
         injectHandlersAttached = false;
 
-        const wrapper = document.createElement('div');
-        wrapper.id = 'idn-qris-inject-wrap';
-        wrapper.setAttribute('data-idn-persistent', 'true');
-        wrapper.innerHTML = buildInjectHTML(username);
+        const panelWrap = document.createElement('div');
+        panelWrap.id = 'idn-qris-inject-wrap';
+        panelWrap.setAttribute('data-idn-persistent', 'true');
+        panelWrap.innerHTML = buildInjectHTML(username);
 
-        if (anchor.before) {
-            anchor.parent.insertBefore(wrapper, anchor.before);
-        } else {
-            anchor.parent.appendChild(wrapper);
-        }
+        wrapper.prepend(panelWrap);
 
         if (!document.getElementById('idn-qris-inject-panel')) {
             debugLog('Inject gagal verify');
+            panelWrap.remove();
             return false;
         }
 
         attachInjectHandlers();
         ensureInjectOnTop('inject');
-        debugLog('Panel inject', anchor.source);
+        debugLog('Panel inject → wrapper.prepend (hoki=', !!getHokiRoot(), ')');
         return true;
     }
 
@@ -688,34 +690,36 @@
     }
 
     function watchInjection() {
-        let topGuardTimer = null;
-        const onDomChange = () => {
-            const panel = document.getElementById('idn-qris-inject-wrap');
-            if (panel) {
-                if (topGuardTimer) clearTimeout(topGuardTimer);
-                topGuardTimer = setTimeout(() => {
-                    ensureInjectOnTop('dom-change');
-                }, 50);
-                return;
-            }
-            if (!isIdnQrisPage() || reinjectionInProgress) return;
-            reinjectionInProgress = true;
-            injectQrisPanel(true).finally(() => {
-                reinjectionInProgress = false;
+        const observeWrapper = () => {
+            const wrapper = getDepositWrapper();
+            if (!wrapper || wrapper.__idnQrisObserved) return;
+            wrapper.__idnQrisObserved = true;
+
+            const obs = new MutationObserver(() => {
+                if (document.getElementById('idn-qris-inject-wrap')) {
+                    ensureInjectOnTop('hoki-prepend');
+                }
             });
+            obs.observe(wrapper, { childList: true });
+            debugLog('watch wrapper childList');
         };
 
-        const obs = new MutationObserver(onDomChange);
-        obs.observe(document.body, { childList: true, subtree: true });
+        observeWrapper();
+        const bootObs = new MutationObserver(() => {
+            if (getDepositWrapper()) {
+                observeWrapper();
+                bootObs.disconnect();
+            }
+        });
+        bootObs.observe(document.body, { childList: true, subtree: true });
 
-        // HOKI lazy-load ~1–3s — poll singkat supaya panel tetap di atas
         let n = 0;
         const topPoll = setInterval(() => {
             n += 1;
             if (document.getElementById('idn-qris-inject-wrap')) {
-                ensureInjectOnTop('hoki-poll');
+                ensureInjectOnTop('poll');
             }
-            if (n >= 20) clearInterval(topPoll);
+            if (n >= 24) clearInterval(topPoll);
         }, 500);
     }
 
