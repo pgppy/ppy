@@ -8,7 +8,7 @@
     'use strict';
 
     const LOG = '[IDN-QRIS]';
-    const VERSION = '0.5.1';
+    const VERSION = '0.5.2';
     const PANEL_TITLE = 'DEPOSIT QRIS (INSTANT AUTO)';
 
     if (window.__IDN_QRIS_INJECT_BOOTED__) {
@@ -166,24 +166,44 @@
         return document.querySelector('.content-page__wrapper');
     }
 
-    function depositShellReady(wrapper) {
-        if (!wrapper) return false;
-        // Tunggu HOKI selesai hijack DOM (rename title native → "Manual Deposit")
-        return !!(getHokiRoot() && wrapper.querySelector('#formDeposit'));
-    }
+    /** HOKI biasa mount 1–3s; tanpa HOKI inject setelah grace (jangan nunggu 10s). */
+    const HOKI_GRACE_MS = 2500;
 
     function waitForDepositShell(maxMs) {
         const limit = maxMs || 10000;
         return new Promise((resolve) => {
             const start = Date.now();
+            let formReadyAt = 0;
+
             const tick = () => {
                 const w = getDepositWrapper();
-                if (w && depositShellReady(w)) {
+                if (!w) {
+                    if (Date.now() - start >= limit) {
+                        resolve(getDepositWrapper());
+                        return;
+                    }
+                    setTimeout(tick, 100);
+                    return;
+                }
+
+                const hasForm = !!w.querySelector('#formDeposit');
+                const hasHoki = !!getHokiRoot();
+
+                if (hasForm && hasHoki) {
                     resolve(w);
                     return;
                 }
+
+                if (hasForm) {
+                    if (!formReadyAt) formReadyAt = Date.now();
+                    if (Date.now() - formReadyAt >= HOKI_GRACE_MS) {
+                        resolve(w);
+                        return;
+                    }
+                }
+
                 if (Date.now() - start >= limit) {
-                    resolve(getDepositWrapper());
+                    resolve(w);
                     return;
                 }
                 setTimeout(tick, 100);
