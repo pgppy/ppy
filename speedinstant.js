@@ -1,7 +1,7 @@
 // ============================================================================
 // SPEED ENGINE QRIS POPPAY INJECTION
 // Adapted from ug_test_simple.js for speed.html / Sip69 deposit page
-// BOB RESEARCH LABS - v1.2.2-speed (readonly username field + session/API resolve)
+// BOB RESEARCH LABS - v1.2.3-speed (dedupe inject + lock anti double panel)
 // Target DOM: inject HANYA saat #deposit-qr-tab aktif (aria-selected)
 // Tab bank/va/ewallet/pulsa → teardown Poppay, form native balik
 //
@@ -27,7 +27,7 @@
     }
     window.__SPEED_QRIS_INJECT_BOOTED__ = true;
 
-    console.log('🚀 [SPEED-QRIS] Starting v1.2.2 (Speed Engine + pre-deposit)...');
+    console.log('🚀 [SPEED-QRIS] Starting v1.2.3 (Speed Engine + pre-deposit)...');
 
     // Sniff X-Data-Reference dari native Speed fetch/XHR sejak page load
     let _speedXRefSniffed = '';
@@ -1012,11 +1012,19 @@
         }
     }
 
-    function teardownInjection() {
-        const wrapper = document.getElementById('ug-poppay-wrapper');
-        if (wrapper) {
-            wrapper.remove();
+    function dedupeInjectWrappers() {
+        const wrappers = document.querySelectorAll('#ug-poppay-wrapper');
+        for (let i = wrappers.length - 1; i >= 1; i -= 1) {
+            wrappers[i].remove();
         }
+        const inners = document.querySelectorAll('#ug-poppay-qris-full, #speed-poppay-qris-full');
+        for (let i = inners.length - 1; i >= 1; i -= 1) {
+            inners[i].remove();
+        }
+    }
+
+    function teardownInjection() {
+        document.querySelectorAll('#ug-poppay-wrapper').forEach((el) => el.remove());
 
         showNativeDepositForm();
 
@@ -1051,8 +1059,9 @@
         }
 
         // Tab QRIS aktif
+        dedupeInjectWrappers();
         const wrapper = document.getElementById('ug-poppay-wrapper');
-        const inner = document.getElementById('ug-poppay-qris-full');
+        const inner = document.getElementById('ug-poppay-qris-full') || document.getElementById('speed-poppay-qris-full');
         if (wrapper && inner) {
             hideNativeDepositFormOnQRIS();
             return true;
@@ -1142,6 +1151,14 @@
     // Inject Poppay Form (NEW APPROACH - Use stable container!)
     // ========================================================================
     async function replaceQRIS() {
+        if (replaceQRISInProgress) {
+            console.log('ℹ️ [SPEED-QRIS] replaceQRIS skipped — already in progress');
+            return !!(document.getElementById('ug-poppay-qris-full') || document.getElementById('speed-poppay-qris-full'));
+        }
+        replaceQRISInProgress = true;
+        try {
+        dedupeInjectWrappers();
+
         const paymentHealthOk = await checkPaymentHealth();
         if (!paymentHealthOk) {
             teardownInjection();
@@ -1156,7 +1173,8 @@
 
         // Check if already injected
         const existingElement = document.getElementById('ug-poppay-qris-full') || document.getElementById('speed-poppay-qris-full');
-        if (existingElement) {
+        if (existingElement && document.getElementById('ug-poppay-wrapper')) {
+            dedupeInjectWrappers();
             console.log('ℹ️ [SPEED-QRIS] Already injected');
             hideNativeDepositFormOnQRIS();
             return true;
@@ -1253,6 +1271,7 @@
         // Create SUPER-PERSISTENT wrapper
         const wrapper = document.createElement('div');
         wrapper.id = 'ug-poppay-wrapper';
+        wrapper.setAttribute('data-speed-poppay-wrap', 'true');
         wrapper.setAttribute('data-ug-persistent', 'true');
         wrapper.style.cssText = `
             position: relative !important;
@@ -1289,9 +1308,11 @@
             if ((!wrapperElement || !innerElement) && isInjected) {
                 console.warn('[SPEED-QRIS] ⚠️ Injection removed! Re-injecting NOW...');
                 setTimeout(async () => {
-                    if (!reinjectionInProgress) {
-                        reinjectionInProgress = true;
-                        await replaceQRIS();
+                    if (reinjectionInProgress || replaceQRISInProgress) return;
+                    reinjectionInProgress = true;
+                    try {
+                        await syncInjectionToQRISTab('Removed');
+                    } finally {
                         reinjectionInProgress = false;
                     }
                 }, 50);
@@ -1965,6 +1986,9 @@
         setTimeout(tryInit, 500);
 
         return true;
+        } finally {
+            replaceQRISInProgress = false;
+        }
     }
 
     // ========================================================================
@@ -2362,6 +2386,7 @@
     let isInjected = false;
     let observer = null;
     let reinjectionInProgress = false;
+    let replaceQRISInProgress = false;
     let lifecycleStarted = false; // monitors sekali saja (interval/observer/click)
     let activateInFlight = false;
     let buttonHandlersAttached = false; // Prevent duplicate button attachment
@@ -2424,11 +2449,11 @@
             console.log('🔍 [SPEED-QRIS] Setting up QRIS-only tab monitoring...');
 
             const onTabChange = (source) => {
-                [50, 150, 350, 700, 1200].forEach((delay) => {
-                    setTimeout(() => {
-                        syncInjectionToQRISTab(source + '@' + delay).catch(() => { });
-                    }, delay);
-                });
+                if (reinjectionInProgress || replaceQRISInProgress) return;
+                clearTimeout(onTabChange._t);
+                onTabChange._t = setTimeout(() => {
+                    syncInjectionToQRISTab(source).catch(() => { });
+                }, 200);
             };
 
             document.addEventListener('click', function (e) {
@@ -2486,8 +2511,12 @@
             }
 
             const wrapper = document.getElementById('ug-poppay-wrapper');
-            const inner = document.getElementById('ug-poppay-qris-full');
-            if ((!wrapper || !inner) && !reinjectionInProgress) {
+            const inner = document.getElementById('ug-poppay-qris-full') || document.getElementById('speed-poppay-qris-full');
+            if (wrapper && inner) {
+                dedupeInjectWrappers();
+                return;
+            }
+            if ((!wrapper || !inner) && !reinjectionInProgress && !replaceQRISInProgress) {
                 reinjectionInProgress = true;
                 (async () => {
                     try {
