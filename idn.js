@@ -8,7 +8,7 @@
     'use strict';
 
     const LOG = '[IDN-QRIS]';
-    const VERSION = '0.5.1';
+    const VERSION = '0.5.2';
     const PANEL_TITLE = 'DEPOSIT QRIS (INSTANT AUTO)';
 
     if (window.__IDN_QRIS_INJECT_BOOTED__) {
