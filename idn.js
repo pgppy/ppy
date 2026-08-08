@@ -9,7 +9,7 @@
 
     const LOG = '[IDN-QRIS]';
     const VERSION = '0.5.1';
-    const PANEL_TITLE = 'Instant Auto';
+    const PANEL_TITLE = 'DEPOSIT QRIS (INSTANT AUTO)';
 
     if (window.__IDN_QRIS_INJECT_BOOTED__) {
         if (typeof window.__IDN_QRIS_BOOT__ === 'function') {
