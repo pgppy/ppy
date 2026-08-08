@@ -1,7 +1,7 @@
 // ============================================================================
 // SPEED ENGINE QRIS POPPAY INJECTION
 // Adapted from ug_test_simple.js for speed.html / Sip69 deposit page
-// BOB RESEARCH LABS - v1.2.0-speed (pre-deposit POST /services/deposits)
+// BOB RESEARCH LABS - v1.2.2-speed (readonly username field + session/API resolve)
 // Target DOM: inject HANYA saat #deposit-qr-tab aktif (aria-selected)
 // Tab bank/va/ewallet/pulsa → teardown Poppay, form native balik
 //
@@ -27,7 +27,7 @@
     }
     window.__SPEED_QRIS_INJECT_BOOTED__ = true;
 
-    console.log('🚀 [SPEED-QRIS] Starting v1.2.0 (Speed Engine + pre-deposit)...');
+    console.log('🚀 [SPEED-QRIS] Starting v1.2.2 (Speed Engine + pre-deposit)...');
 
     // Sniff X-Data-Reference dari native Speed fetch/XHR sejak page load
     let _speedXRefSniffed = '';
@@ -341,152 +341,172 @@
     }
 
     // ========================================================================
-    // Get Username — Speed Engine / Sip69
+    // Get Username — Speed Engine (session/API first, DOM ketat terakhir)
     // ========================================================================
+    let _cachedUsername = '';
+
+    function isValidUsername(text) {
+        if (!text) return false;
+        const t = String(text).trim();
+        if (t.length < 3 || t.length > 24) return false;
+        if (!/^[a-zA-Z0-9_]+$/.test(t)) return false;
+        const blacklist = new Set([
+            'wallet', 'saldo', 'profil', 'profile', 'deposit', 'withdraw',
+            'referral', 'referal', 'promo', 'bonus', 'keluar', 'logout',
+            'login', 'register', 'daftar', 'masuk', 'hai', 'dompet',
+            'silver', 'gold', 'platinum', 'member', 'account', 'username',
+            'sip69', 'pilih', 'kirim', 'transfer', 'bank', 'ewallet', 'qris',
+            'livechat', 'admin', 'support', 'customer', 'service', 'guest',
+            'null', 'undefined', 'true', 'false', 'desktop', 'mobile',
+        ]);
+        if (blacklist.has(t.toLowerCase())) return false;
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(t)) return false;
+        return true;
+    }
+
+    function getUsernameFromOverride() {
+        const forced = (
+            window.SPEED_USERNAME ||
+            window.PGSCRIPT_USERNAME ||
+            (window.PG_CONFIG && window.PG_CONFIG.USERNAME) ||
+            ''
+        ).toString().trim();
+        return isValidUsername(forced) ? forced : null;
+    }
+
+    function getUsernameFromUserInfoStorage() {
+        try {
+            for (const store of [localStorage, sessionStorage]) {
+                const raw = store.getItem('user-info');
+                if (!raw || raw === 'null') continue;
+                const obj = JSON.parse(raw);
+                const u = obj?.username || obj?.user?.username || obj?.user_name;
+                if (isValidUsername(u)) return u;
+            }
+        } catch (_) { }
+        return null;
+    }
+
+    function getUsernameFromAuthToken() {
+        try {
+            for (const val of Object.values(parseCookieMap())) {
+                if (!val || !val.startsWith('eyJ')) continue;
+                const payload = decodeJwtPayload(val);
+                if (!payload || !(payload.type === 'player' || payload.aud || payload.username)) continue;
+                for (const field of ['username', 'user_name', 'preferred_username', 'name']) {
+                    if (isValidUsername(payload[field])) return payload[field];
+                }
+            }
+        } catch (_) { }
+        return null;
+    }
+
+    function getUsernameFromHeaderProfile() {
+        const profileEl = document.getElementById('header-profile');
+        if (!profileEl) return null;
+        const pText = (profileEl.textContent || '').replace(/\s+/g, ' ').trim();
+        const pm = pText.match(/^Hai[, ]+([a-zA-Z0-9_]{3,24})\b/i);
+        if (pm && isValidUsername(pm[1])) return pm[1];
+        return null;
+    }
+
+    async function getUsernameFromSpeedApi() {
+        const paths = ['players/identity', 'players/me'];
+        for (const path of paths) {
+            try {
+                const data = await speedApiFetch(path, { method: 'GET' });
+                const row = Array.isArray(data) ? (data[0] || null) : data;
+                const u = row?.username || row?.user?.username || row?.player?.username;
+                if (isValidUsername(u)) {
+                    if (!_speedProfileCache && row) _speedProfileCache = row;
+                    else if (_speedProfileCache) _speedProfileCache.username = u;
+                    return u;
+                }
+            } catch (e) {
+                console.warn('[SPEED-QRIS] Username API', path, e.message || e);
+            }
+        }
+        return null;
+    }
+
     async function getUsername() {
         try {
-            const blacklist = new Set([
-                'wallet', 'saldo', 'profil', 'profile', 'deposit', 'withdraw',
-                'referral', 'referal', 'promo', 'bonus', 'keluar', 'logout',
-                'login', 'register', 'daftar', 'masuk', 'hai', 'dompet',
-                'silver', 'gold', 'platinum', 'member', 'account', 'username',
-                'sip69', 'pilih', 'kirim', 'transfer', 'bank', 'ewallet', 'qris'
-            ]);
-
-            const isValidUser = (text) => {
-                if (!text) return false;
-                const t = String(text).trim();
-                if (t.length < 3 || t.length > 24) return false;
-                if (!/^[a-zA-Z0-9_]+$/.test(t)) return false;
-                if (blacklist.has(t.toLowerCase())) return false;
-                return true;
-            };
-
-            // 0) Explicit override
-            const forced = (
-                window.SPEED_USERNAME ||
-                window.PGSCRIPT_USERNAME ||
-                (window.PG_CONFIG && window.PG_CONFIG.USERNAME) ||
-                ''
-            ).toString().trim();
-            if (isValidUser(forced)) {
-                console.log(`✅ [SPEED-QRIS] Username from override: ${forced}`);
-                return forced;
+            if (_cachedUsername && isValidUsername(_cachedUsername)) {
+                return _cachedUsername;
             }
 
-            // 0b) Sip69 live: localStorage.user-info = {"username":"pgpoppay",...}
-            try {
-                for (const store of [localStorage, sessionStorage]) {
-                    const raw = store.getItem('user-info');
-                    if (!raw || raw === 'null') continue;
-                    const obj = JSON.parse(raw);
-                    const u = obj?.username || obj?.user?.username || obj?.user_name;
-                    if (isValidUser(u)) {
-                        console.log(`✅ [SPEED-QRIS] Username from user-info: ${u}`);
-                        return u;
-                    }
-                }
-            } catch (_) { }
-
-            // 0c) #header-profile → "Hai, pgpoppay" (prioritas DOM Sip69)
-            const profileEl = document.getElementById('header-profile');
-            if (profileEl) {
-                const pText = (profileEl.textContent || '').replace(/\s+/g, ' ').trim();
-                const pm = pText.match(/Hai[, ]+([a-zA-Z0-9_]{3,24})/i);
-                if (pm && isValidUser(pm[1])) {
-                    console.log(`✅ [SPEED-QRIS] Username from #header-profile: ${pm[1]}`);
-                    return pm[1];
-                }
-            }
-
-            // 1) Greeting: "Hai, username" / "Hai username" (boleh diikuti saldo di node parent)
-            const greetNodes = document.querySelectorAll('div, span, p, a, h1, h2, h3, h4');
-            for (const el of greetNodes) {
-                if (el.children.length > 2) continue;
-                const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
-                const m = text.match(/Hai[, ]+([a-zA-Z0-9_]{3,24})/i);
-                if (m && isValidUser(m[1])) {
-                    console.log(`✅ [SPEED-QRIS] Username from greeting: ${m[1]}`);
-                    return m[1];
-                }
-            }
-
-            // 2) Near #header-profile (siblings / parent text)
-            const profile = document.getElementById('header-profile');
-            if (profile) {
-                const wrap = profile.closest('div') || profile.parentElement;
-                if (wrap) {
-                    const texts = (wrap.innerText || '').split(/\n|\s{2,}/).map(s => s.trim());
-                    for (const t of texts) {
-                        const m2 = t.match(/Hai[, ]+([a-zA-Z0-9_]{3,24})/i);
-                        if (m2 && isValidUser(m2[1])) {
-                            console.log(`✅ [SPEED-QRIS] Username near header-profile: ${m2[1]}`);
-                            return m2[1];
-                        }
-                        if (isValidUser(t)) {
-                            console.log(`✅ [SPEED-QRIS] Username near header-profile: ${t}`);
-                            return t;
-                        }
-                    }
-                }
-            }
-
-            // 3) localStorage / sessionStorage common keys
-            const storageKeys = [
-                'username', 'user_name', 'userName', 'player', 'player_name',
-                'member', 'member_username', 'auth_username', 'login_username'
+            const sources = [
+                ['override', () => getUsernameFromOverride()],
+                ['user-info', () => getUsernameFromUserInfoStorage()],
+                ['jwt', () => getUsernameFromAuthToken()],
             ];
-            for (const store of [localStorage, sessionStorage]) {
-                try {
-                    for (const key of storageKeys) {
-                        const val = store.getItem(key);
-                        if (isValidUser(val)) {
-                            console.log(`✅ [SPEED-QRIS] Username from storage ${key}: ${val}`);
-                            return val;
-                        }
-                    }
-                    // nested JSON blobs
-                    for (let i = 0; i < store.length; i++) {
-                        const k = store.key(i);
-                        const raw = store.getItem(k);
-                        if (!raw || raw.length > 5000 || raw[0] !== '{') continue;
-                        try {
-                            const obj = JSON.parse(raw);
-                            for (const field of ['username', 'user_name', 'name', 'player_name', 'userName']) {
-                                if (isValidUser(obj?.[field])) {
-                                    console.log(`✅ [SPEED-QRIS] Username from JSON ${k}.${field}: ${obj[field]}`);
-                                    return obj[field];
-                                }
-                                if (isValidUser(obj?.user?.[field])) {
-                                    console.log(`✅ [SPEED-QRIS] Username from JSON ${k}.user.${field}: ${obj.user[field]}`);
-                                    return obj.user[field];
-                                }
-                            }
-                        } catch (_) { }
-                    }
-                } catch (_) { }
+
+            for (const [name, fn] of sources) {
+                const u = fn();
+                if (u) {
+                    _cachedUsername = u;
+                    console.log(`✅ [SPEED-QRIS] Username from ${name}: ${u}`);
+                    return u;
+                }
             }
 
-            // 4) __NEXT_DATA__ (if hydrated with user)
-            try {
-                const nd = document.getElementById('__NEXT_DATA__');
-                if (nd) {
-                    const data = JSON.parse(nd.textContent || '{}');
-                    const dump = JSON.stringify(data);
-                    const m = dump.match(/"username"\s*:\s*"([a-zA-Z0-9_]{3,24})"/);
-                    if (m && isValidUser(m[1])) {
-                        console.log(`✅ [SPEED-QRIS] Username from __NEXT_DATA__: ${m[1]}`);
-                        return m[1];
-                    }
-                }
-            } catch (_) { }
+            const apiUser = await getUsernameFromSpeedApi();
+            if (apiUser) {
+                _cachedUsername = apiUser;
+                console.log(`✅ [SPEED-QRIS] Username from players/identity: ${apiUser}`);
+                return apiUser;
+            }
 
-            console.warn('⚠️ [SPEED-QRIS] Username NOT found - will NOT inject');
+            const headerUser = getUsernameFromHeaderProfile();
+            if (headerUser) {
+                _cachedUsername = headerUser;
+                console.log(`✅ [SPEED-QRIS] Username from header-profile: ${headerUser}`);
+                return headerUser;
+            }
+
+            console.warn('⚠️ [SPEED-QRIS] Username NOT found — login ulang atau set window.SPEED_USERNAME');
             return null;
         } catch (error) {
             console.error('❌ [SPEED-QRIS] Error getting username:', error);
             return null;
         }
+    }
+
+    function escapeHtml(str) {
+        return String(str || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    async function resolvePayUsername() {
+        let u = await getUsername();
+        if (!u) return null;
+        const apiUser = await getUsernameFromSpeedApi();
+        if (apiUser && apiUser.toLowerCase() !== u.toLowerCase()) {
+            console.warn(`⚠️ [SPEED-QRIS] Username corrected: ${u} → ${apiUser}`);
+            u = apiUser;
+        }
+        _cachedUsername = u;
+        return u;
+    }
+
+    function readInjectUsername() {
+        const hidden = document.getElementById('speedQrisUsername');
+        const display = document.getElementById('speedQrisUsernameDisplay');
+        const u = (hidden?.value || display?.value || _cachedUsername || '').trim();
+        return isValidUsername(u) ? u : null;
+    }
+
+    function syncInjectUsernameDisplay(username) {
+        const u = (username || '').trim();
+        if (!isValidUsername(u)) return;
+        _cachedUsername = u;
+        const hidden = document.getElementById('speedQrisUsername');
+        const display = document.getElementById('speedQrisUsernameDisplay');
+        if (hidden) hidden.value = u;
+        if (display) display.value = u;
     }
 
     // ========================================================================
@@ -1224,6 +1244,12 @@
 
         console.log('[SPEED-QRIS] Parent container protection active');
 
+        const payUser = await resolvePayUsername();
+        if (!payUser) {
+            console.error('❌ [SPEED-QRIS] INJECTION BLOCKED - Username resolve failed');
+            return false;
+        }
+
         // Create SUPER-PERSISTENT wrapper
         const wrapper = document.createElement('div');
         wrapper.id = 'ug-poppay-wrapper';
@@ -1510,6 +1536,11 @@
                     cursor: not-allowed;
                     border-color: #4CAF50;
                 }
+
+                .qris-username-readonly {
+                    text-align: left;
+                    letter-spacing: 0.02em;
+                }
                 
                 .qris-input:focus {
                     outline: none;
@@ -1620,6 +1651,22 @@
                 <div class="qris-form" id="qrisFormContainer">
                     <form id="formDepositAutoQris">
                         <input type="hidden" id="bankSelectAutoQris" value="QRIS">
+                        <input type="hidden" id="speedQrisUsername" value="${escapeHtml(payUser)}">
+                        
+                        <div class="form-group mb-3">
+                            <label>Username</label>
+                            <input
+                                class="qris-input qris-display-readonly qris-username-readonly"
+                                type="text"
+                                id="speedQrisUsernameDisplay"
+                                value="${escapeHtml(payUser)}"
+                                readonly
+                                tabindex="-1"
+                                autocomplete="off"
+                                spellcheck="false"
+                            >
+                            <small class="qris-input-hint">Akun login — otomatis dari session Speed</small>
+                        </div>
                         
                         <div class="form-group mb-3">
                             <label>Jumlah Deposit</label>
@@ -2139,10 +2186,13 @@
                     await loadQrisSDK();
                 }
 
-                // Get username (with validation)
-                const username = await getUsername();
-
-                if (!username) {
+                // Username dari field readonly form (sudah di-resolve saat inject)
+                let payUser = readInjectUsername();
+                if (!payUser) {
+                    payUser = await resolvePayUsername();
+                    syncInjectUsernameDisplay(payUser);
+                }
+                if (!payUser) {
                     throw new Error('Username tidak ditemukan. Silakan login terlebih dahulu.');
                 }
 
@@ -2166,12 +2216,12 @@
 
                 const invoice = (CONFIG.INVOICE_PREFIX || 'SPEED-') + Date.now();
                 const displayInput = Math.floor(amount / CONFIG.CONVERSION_RATIO);
-                console.log('💳 [SPEED-QRIS] Creating payment:', { amount, displayInput, username, invoice, promotion });
+                console.log('💳 [SPEED-QRIS] Creating payment:', { amount, displayInput, username: payUser, invoice, promotion });
 
                 restorePoppayFetchHook = withPoppayCreateTransactionHook(async (poppayData, refId) => {
                     btnText.textContent = 'Creating deposit...';
                     await createSpeedPreDeposit({
-                        username,
+                        username: payUser,
                         amount,
                         promotion,
                         playerNote: refId,
@@ -2185,8 +2235,8 @@
                     amount: amount,
                     invoice: invoice,
                     notes: `Speed Auto Deposit - ${invoice}`,
-                    username: username,
-                    payor_name: username,
+                    username: payUser,
+                    payor_name: payUser,
                     payor_email: '',
                     displayMode: 'inline',
                     containerId: 'qris-payment-frame',
