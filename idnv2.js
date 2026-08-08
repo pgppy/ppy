@@ -8,7 +8,7 @@
     'use strict';
 
     const LOG = '[IDN-QRIS]';
-    const VERSION = '0.5.2';
+    const VERSION = '0.5.5';
     const PANEL_TITLE = 'DEPOSIT QRIS (INSTANT AUTO)';
 
     if (window.__IDN_QRIS_INJECT_BOOTED__) {
@@ -228,6 +228,7 @@
 
         if (wrap.parentElement !== wrapper || wrapper.firstElementChild !== wrap) {
             wrapper.prepend(wrap);
+            restorePanelTitle();
             debugLog('panel prepend wrapper', reason || '');
             return true;
         }
@@ -278,10 +279,23 @@
         return `
             <style>
                 #idn-qris-inject-wrap { margin-bottom: 12px; }
-                #idn-qris-inject-wrap .idn-qris-panel {
-                    background: var(--idn-qris-bg, #1a1a2e);
-                    border-radius: 0.25rem;
-                    padding: 0 0 12px;
+                /* Native .form-deposit-withdraw rules — form pakai class sendiri dulu layout horizontal */
+                #idn-qris-inject-wrap .form-deposit-withdraw .form-row {
+                    display: flex;
+                    flex-wrap: wrap;
+                    flex-direction: row;
+                }
+                #idn-qris-inject-wrap .form-deposit-withdraw .form-group,
+                #idn-qris-inject-wrap .form-deposit-withdraw .btn-wrapper {
+                    flex: 1 1 100%;
+                    width: 100%;
+                    max-width: 100%;
+                    box-sizing: border-box;
+                }
+                #idn-qris-inject-wrap .form-deposit-withdraw .btn-wrapper {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 12px;
                 }
                 #idn-qris-inject-wrap .idn-qris-panel__title {
                     color: #fff;
@@ -289,11 +303,11 @@
                     font-weight: 600;
                     padding: 12px 16px 8px;
                     margin: 0;
+                    text-transform: none;
                 }
-                #idn-qris-inject-wrap .idn-qris-panel__body { padding: 0 16px; }
                 #idn-qris-inject-wrap .idn-qris-result { display: none; }
                 #idn-qris-inject-wrap .idn-qris-result.active { display: block; margin-top: 12px; }
-                #idn-qris-payment-frame { min-height: 320px; text-align: center; }
+                #idn-qris-inject-wrap .idn-qris-result.active #idn-qris-payment-frame { min-height: 320px; text-align: center; }
                 #idn-qris-payment-result { margin-top: 12px; }
                 #idn-qris-inject-wrap .idn-qris-success-box {
                     padding: 16px;
@@ -304,10 +318,10 @@
                 #idn-qris-inject-wrap .idn-qris-success-box h4 { margin: 0 0 8px; font-size: 16px; }
                 #idn-qris-inject-wrap .idn-qris-success-box p { margin: 0; font-size: 14px; }
             </style>
-            <div class="idn-qris-panel" id="idn-qris-inject-panel" data-idn-isolated="true">
+            <div class="content-page__container content-page__container--bg" id="idn-qris-inject-panel" data-idn-isolated="true">
                 <div class="idn-qris-panel__title" id="idnQrisPanelTitle">${PANEL_TITLE}</div>
-                <div class="idn-qris-panel__body pages-misc">
-                    <form class="idn-qris-form" id="idnFormDepositQris" autocomplete="off">
+                <div class="pages-misc">
+                    <form class="form-deposit-withdraw" id="idnFormDepositQris" autocomplete="off">
                         <input type="hidden" id="idnQrisUsername" value="${username}">
                         <div class="form-row">
                             <div class="form-group">
@@ -360,11 +374,12 @@
     function startPanelGuard() {
         if (panelGuardStarted) return;
         panelGuardStarted = true;
-        const panel = document.getElementById('idn-qris-inject-panel');
-        if (!panel) return;
+        const title = document.getElementById('idnQrisPanelTitle');
+        if (!title) return;
+        restorePanelTitle();
         const obs = new MutationObserver(() => restorePanelTitle());
-        obs.observe(panel, { childList: true, subtree: true, characterData: true });
-        setInterval(restorePanelTitle, 1500);
+        obs.observe(title, { childList: true, subtree: true, characterData: true });
+        setInterval(restorePanelTitle, 800);
     }
 
     function readInjectAmount() {
