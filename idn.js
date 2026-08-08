@@ -264,7 +264,7 @@
                 #idn-qris-inject-wrap .idn-qris-success-box p { margin: 0; font-size: 14px; }
             </style>
             <div class="content-page__container content-page__container--bg" id="idn-qris-inject-panel">
-                <div class="pages-box__title pages-box__title--no-pad">Instant Auto</div>
+                <div class="pages-box__title pages-box__title--no-pad">DEPOSIT QRIS (INSTANT AUTO)</div>
                 <div class="pages-misc">
                     <form class="form-deposit-withdraw" id="idnFormDepositQris">
                         <input type="hidden" id="idnQrisUsername" value="${username}">
