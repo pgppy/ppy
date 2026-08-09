@@ -12,7 +12,7 @@
 // - Tanpa mask: F5 di /deposit = HTML tanpa script = Poppay hilang
 //
 // Embed di widget index:
-//    <script src="https://cdn.jsdelivr.net/gh/pgppy/ppy@main/speedv7.js?store_key=sk_xxx&min_depo=50000&max_depo=10000000"></script>
+//    <script src="https://cdn.jsdelivr.net/gh/pgppy/ppy@main/speednew.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000"></script>
 //    min_depo / max_depo opsional — kalau tidak diisi: default min 10.000 (10rb), max 10.000.000 (10jt)
 //    atau PG_CONFIG: window.PG_CONFIG={STORE_KEY:'sk_xxx',MIN_DEPO:10000,MAX_DEPO:10000000}
 // ============================================================================
@@ -129,7 +129,7 @@
             const src = current?.src || Array.from(document.querySelectorAll('script[src]'))
                 .map((s) => s.src)
                 .reverse()
-                .find((url) => /speed[_-]?qris[_-]?inject\.js(\?|$)|speedv7\.js(\?|$)|ug(script|instant|v2|1|test_simple)?\.js(\?|$)/i.test(url));
+                .find((url) => /speed(?:new|v7|instantv4)?\.js(\?|$)|speed[_-]?qris[_-]?inject\.js(\?|$)|ug(script|instant|v2|1|test_simple)?\.js(\?|$)/i.test(url));
             if (!src) return null;
             const url = new URL(src, window.location.href);
             return url.searchParams.get(name);
