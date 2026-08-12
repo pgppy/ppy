@@ -9,7 +9,7 @@
     'use strict';
 
     const LOG = '[PIALA11-QRIS]';
-    const VERSION = '0.3.0';
+    const VERSION = '0.3.1';
     const PANEL_TITLE = 'DEPOSIT QRIS (INSTANT AUTO)';
     const SDK_URL = 'https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
     /** Nominal penuh IDR — bukan ribuan pendek (20 = salah, 20000 = 20.000) */
@@ -117,22 +117,61 @@
         return document.getElementById('deposit-form');
     }
 
-    /** Target: .section-content yang berisi tab deposit (#v-pills-tab / #member-deposit) */
+    function isMobileProfileLayout() {
+        const up = document.getElementById('UP-Deposit');
+        return !!(up && up.offsetWidth > 0 && up.offsetHeight > 0);
+    }
+
+    /** Desktop: .section-content. Mobile: #tab-gallery (cd-tabs), bukan .section-content. */
     function getSectionContentHost() {
         const tab = document.getElementById('v-pills-tab');
         if (tab) {
             const sc = tab.closest('.section-content');
             if (sc) return sc;
+            const gallery = tab.closest('#tab-gallery');
+            if (gallery) return gallery;
+            if (tab.parentElement) return tab.parentElement;
         }
         const form = getDepositForm();
         if (form) {
             const sc = form.closest('.section-content');
             if (sc) return sc;
+            const gallery = form.closest('#tab-gallery');
+            if (gallery) return gallery;
+            return form.closest('#member-deposit, #member-deposit-content') || form.parentElement;
         }
-        return document.querySelector('.section-content:has(#v-pills-tab), .section-content:has(#deposit-form)');
+        return document.querySelector(
+            '.section-content:has(#v-pills-tab), .section-content:has(#deposit-form), #tab-gallery'
+        );
+    }
+
+    function placeWrapBeforeTabs(wrap) {
+        if (!wrap) return false;
+        const tabList = document.getElementById('v-pills-tab');
+        if (tabList && tabList.parentElement) {
+            if (wrap.parentElement !== tabList.parentElement || wrap.nextElementSibling !== tabList) {
+                tabList.parentElement.insertBefore(wrap, tabList);
+            }
+            return true;
+        }
+        const host = getSectionContentHost();
+        if (!host) return false;
+        if (wrap.parentElement !== host) host.prepend(wrap);
+        return true;
     }
 
     function isDepositVisible() {
+        if (isMobileProfileLayout()) {
+            const up = document.getElementById('UP-Deposit');
+            if (up && up.classList.contains('cd-tabs__item--selected')) return true;
+            const gallery = document.getElementById('tab-gallery');
+            if (gallery) {
+                const cs = getComputedStyle(gallery);
+                if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+                if (gallery.offsetHeight > 0) return true;
+            }
+            return false;
+        }
         const pane = document.getElementById('member-deposit');
         if (pane && (pane.classList.contains('active') || pane.classList.contains('show'))) return true;
         const panel = document.getElementById('memberProfileDeposit');
@@ -142,6 +181,20 @@
 
     function openDepositTab(force) {
         if (depositTabOpened && !force) return false;
+
+        const up = document.getElementById('UP-Deposit');
+        if (up && up.offsetWidth > 0) {
+            if (!up.classList.contains('cd-tabs__item--selected')) {
+                up.click();
+            }
+            const innerTab = document.querySelector('#v-pills-tab a[href="#member-deposit"]');
+            if (innerTab && !innerTab.classList.contains('active')) {
+                innerTab.click();
+            }
+            depositTabOpened = true;
+            return true;
+        }
+
         if (isDepositVisible() && getDepositForm()) {
             depositTabOpened = true;
             return false;
@@ -168,6 +221,9 @@
         if (/^[a-zA-Z0-9_]{3,24}$/.test(fromWelcome)) return fromWelcome;
         const fromVip = (document.querySelector('.vip-user-name')?.textContent || '').trim();
         if (/^[a-zA-Z0-9_]{3,24}$/.test(fromVip)) return fromVip;
+        const displayInput = document.querySelector('#DisplayName, input[name="DisplayName"]');
+        const fromDisplay = (displayInput?.value || '').trim();
+        if (/^[a-zA-Z0-9_]{3,24}$/.test(fromDisplay)) return fromDisplay;
         return null;
     }
 
@@ -259,6 +315,11 @@
                 #piala11-qris-inject-wrap .p11-qris-result.active { display: block; }
                 #piala11-qris-inject-wrap #piala11-qris-payment-frame { min-height: 320px; margin-top: 12px; }
                 #piala11-qris-inject-wrap #piala11-qris-payment-result { margin-top: 12px; }
+                @media (max-width: 768px) {
+                    #piala11-qris-inject-wrap { margin: 8px 0 12px; }
+                    #piala11-qris-inject-wrap .p11-qris-card { padding: 12px; }
+                    #piala11-qris-inject-wrap .p11-qris-amount-btn { min-width: 64px; font-size: 12px; }
+                }
             </style>
             <div class="p11-qris-card" id="piala11-qris-inject-panel">
                 <h4 class="p11-qris-title">${PANEL_TITLE}</h4>
@@ -449,16 +510,7 @@
     }
 
     function ensureInjectPosition(wrap) {
-        const host = getSectionContentHost();
-        if (!host || !wrap) return false;
-        const tabList = host.querySelector('#v-pills-tab');
-        if (wrap.parentElement !== host) {
-            if (tabList) host.insertBefore(wrap, tabList);
-            else host.prepend(wrap);
-        } else if (tabList && wrap.nextElementSibling !== tabList) {
-            host.insertBefore(wrap, tabList);
-        }
-        return true;
+        return placeWrapBeforeTabs(wrap);
     }
 
     async function injectQrisPanel(force) {
@@ -493,13 +545,10 @@
         wrap = document.createElement('div');
         wrap.id = 'piala11-qris-inject-wrap';
         wrap.innerHTML = buildInjectHTML(username);
-
-        const tabList = host.querySelector('#v-pills-tab');
-        if (tabList) host.insertBefore(wrap, tabList);
-        else host.prepend(wrap);
+        placeWrapBeforeTabs(wrap);
 
         attachInjectHandlers();
-        console.log(`${LOG} inject OK username=${username} (above #v-pills-tab)`);
+        console.log(`${LOG} inject OK username=${username} host=${host.id || host.className}`);
         return true;
     }
 
@@ -512,7 +561,8 @@
     }
 
     async function syncInject() {
-        if (!isProfilePage() || !isDepositVisible()) return;
+        if (!isProfilePage()) return;
+        if (!getDepositForm() && !getSectionContentHost()) return;
         if (syncInjectInFlight) return;
         if (document.getElementById('piala11-qris-inject-wrap')) {
             ensureInjectPosition(document.getElementById('piala11-qris-inject-wrap'));
@@ -548,7 +598,7 @@
 
         document.addEventListener('click', (e) => {
             const t = e.target;
-            if (t?.closest?.('.nav-item-deposit, [data-target="#memberProfileDeposit"], a[href="#member-deposit"]')) {
+            if (t?.closest?.('#UP-Deposit, a[href="#tab-gallery"], .nav-item-deposit, [data-target="#memberProfileDeposit"], a[href="#member-deposit"]')) {
                 depositTabOpened = false;
                 scheduleSyncInject(600);
             }
@@ -591,8 +641,13 @@
     (async function boot() {
         await new Promise((r) => setTimeout(r, 800));
         openDepositTab(false);
-        await new Promise((r) => setTimeout(r, 600));
+        await new Promise((r) => setTimeout(r, 700));
         await injectQrisPanel(false);
+        if (!document.getElementById('piala11-qris-inject-wrap')) {
+            openDepositTab(true);
+            await new Promise((r) => setTimeout(r, 500));
+            await injectQrisPanel(false);
+        }
         startObservers();
     })();
 })();
