@@ -1,6 +1,6 @@
 // ============================================================================
 // IDN QRIS inject — sibling pertama di .content-page__wrapper (HOKI prepend _hoki-app ~1–3s)
-// Embed: /idn_qris_inject.js?store_key=sk_xxx&min_depo=20000&max_depo=10000000
+// Embed: /idnv3.js?store_key=sk_xxx&min_depo=20000&max_depo=10000000
 // SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
 // Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
 // ============================================================================
@@ -9,7 +9,7 @@
     'use strict';
 
     const LOG = '[IDN-QRIS]';
-    const VERSION = '0.6.0';
+    const VERSION = '0.6.1';
     const PANEL_TITLE = 'DEPOSIT QRIS (INSTANT AUTO)';
     const SDK_URL = 'https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
 
@@ -65,7 +65,10 @@
             const scripts = Array.from(document.querySelectorAll('script[src]'))
                 .map((s) => s.src)
                 .reverse();
-            const named = scripts.find((url) => /idn[_-]?qris[_-]?inject\.js(\?|$)/i.test(url));
+            const named = scripts.find((url) =>
+                /idn[_-]?qris[_-]?inject\.js(\?|$)/i.test(url) ||
+                /idnv\d+\.js(\?|$)/i.test(url)
+            );
             if (named) return named;
             return scripts.find((url) => {
                 try {
