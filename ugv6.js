@@ -1,17 +1,17 @@
 // ============================================================================
 // UG QRIS POPPAY INJECTION - ugv6.js
-// BOB RESEARCH LABS - v6.0.2 (pg-ppy-sdk + jajanwin palette, no promo)
+// BOB RESEARCH LABS - v6.0.5 (skip store_key / health bypass ON)
 // SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
 // Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
-// Embed: <script src="https://cdn.jsdelivr.net/gh/pgppy/ppy@main/ugv6.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000"></script>
-// Username: window.getMemberName() / window.memberId first + readonly form field
+// Embed: <script src="...ugv6.js?store_key=sk_xxx&min_depo=20000&max_depo=10000000&buttons=20000,50000,100000,500000"></script>
+// Username: #pageContent .mb-2 only — JS lock + notranslate + restore if Translate mutates DOM
 // Theme: body #2D0017 / primary #E577DE / text #EBDFE6 (match money site)
 // ============================================================================
 
 (function () {
     'use strict';
 
-    console.log('🚀 [UG-QRIS-POPPAY] Starting ugv6 v6.0.2 (no promo)...');
+    console.log('🚀 [UG-QRIS-POPPAY] Starting ugv6 v6.0.5 (skip store_key)...');
 
     // ========================================================================
     // Global Amount Setter (Direct onclick - accessible from HTML)
@@ -50,8 +50,9 @@
     // Configuration
     // ========================================================================
     const CONFIG = {
-        MIN_AMOUNT: 10000,
+        MIN_AMOUNT: 20000,
         MAX_AMOUNT: 10000000,
+        AMOUNT_BUTTONS: [20000, 50000, 100000, 200000, 500000],
         MAX_RETRIES: 20,
         RETRY_DELAY: 500,
         IS_MOBILE: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
@@ -106,19 +107,85 @@
         return t;
     }
 
+    function isValidUser(text) {
+        if (!text) return false;
+        const t = undoTranslateUsername(text).trim();
+        if (t.length < 3 || t.length > 24) return false;
+        if (!/^[a-zA-Z0-9_]+$/.test(t)) return false;
+        const blacklist = new Set([
+            'wallet', 'profile', 'deposit', 'withdraw', 'withdrawal',
+            'referral', 'promo', 'bonus', 'logout', 'login', 'register',
+            'account', 'username', 'settings', 'history', 'transaction',
+            'help', 'contact', 'verification', 'security', 'balance',
+            'new player', 'member', 'this', 'and', 'from', 'or', 'with', 'for', 'new',
+            'dompet', 'saldo', 'profil', 'tarik dana', 'penarikan',
+            'referal', 'promosi', 'keluar', 'masuk', 'daftar',
+            'akun', 'pengaturan', 'riwayat', 'transaksi', 'bantuan',
+            'hubungi kami', 'pusat bantuan', 'verifikasi', 'keamanan',
+            'keamanan akun', 'promo saya', 'bonus saya', 'turnover deposit saya',
+            'tingkat anggota', 'ini', 'dan', 'dari', 'atau', 'dengan', 'untuk', 'baru',
+            'silver', 'gold', 'platinum', 'bronze', 'diamond', 'vip'
+        ]);
+        if (blacklist.has(t.toLowerCase())) return false;
+        return true;
+    }
+
     function protectUsernameNode(el) {
         if (!el || el.nodeType !== 1) return;
         el.classList.add('notranslate');
         el.setAttribute('translate', 'no');
         el.setAttribute('data-ug-username-node', '1');
+        let p = el.parentElement;
+        for (let i = 0; i < 4 && p; i++) {
+            p.classList.add('notranslate');
+            p.setAttribute('translate', 'no');
+            p = p.parentElement;
+        }
     }
 
-    function lockUsername(user, source) {
+    function guardUsernameNode(el, locked) {
+        if (!el || !locked) return;
+        protectUsernameNode(el);
+        el.setAttribute('data-ug-locked-user', locked);
+        if ((el.innerText || '').replace(/\s+/g, ' ').trim() !== locked) {
+            el.textContent = locked;
+        }
+        if (el._ugUserGuard) return;
+        el._ugUserGuard = true;
+        const restore = () => {
+            const want = _lockedUsername || window.__UG_LOCKED_USERNAME__ || locked;
+            if (!want) return;
+            protectUsernameNode(el);
+            const now = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+            if (now !== want) el.textContent = want;
+        };
+        new MutationObserver(restore).observe(el, {
+            childList: true,
+            subtree: true,
+            characterData: true
+        });
+    }
+
+    function findPageContentUsernameNode() {
+        const page = document.getElementById('pageContent');
+        if (!page) return null;
+        const mb2 = page.getElementsByClassName('mb-2');
+        for (let i = 0; i < mb2.length; i++) {
+            const el = mb2[i];
+            if (!el) continue;
+            if (el.classList.contains('subtitle') || /\bsubtitle\b/i.test(el.className || '')) continue;
+            return el;
+        }
+        return null;
+    }
+
+    function lockUsername(user, source, node) {
         const u = undoTranslateUsername(user);
-        if (!u) return null;
+        if (!u || !isValidUser(u)) return null;
         _lockedUsername = u;
         window.__UG_LOCKED_USERNAME__ = u;
         console.log(`✅ [UG-QRIS] Username locked (${source}): ${u}`);
+        if (node) guardUsernameNode(node, u);
         syncUsernameField(u);
         return u;
     }
@@ -146,131 +213,27 @@
 
     async function getUsername() {
         try {
-            if (_lockedUsername && /^[a-zA-Z0-9_]{3,24}$/.test(_lockedUsername)) {
+            if (_lockedUsername && isValidUser(_lockedUsername)) {
                 return _lockedUsername;
             }
-            if (window.__UG_LOCKED_USERNAME__ && /^[a-zA-Z0-9_]{3,24}$/.test(window.__UG_LOCKED_USERNAME__)) {
+            if (window.__UG_LOCKED_USERNAME__ && isValidUser(window.__UG_LOCKED_USERNAME__)) {
                 _lockedUsername = window.__UG_LOCKED_USERNAME__;
                 return _lockedUsername;
             }
 
-            const blacklist = new Set([
-                'wallet', 'profile', 'deposit', 'withdraw', 'withdrawal',
-                'referral', 'promo', 'bonus', 'logout', 'login', 'register',
-                'account', 'username', 'settings', 'history', 'transaction',
-                'help', 'contact', 'verification', 'security', 'balance',
-                'new player', 'member', 'this', 'and', 'from', 'or', 'with', 'for', 'new',
-                'dompet', 'saldo', 'profil', 'tarik dana', 'penarikan',
-                'referal', 'promosi', 'keluar', 'masuk', 'daftar',
-                'akun', 'pengaturan', 'riwayat', 'transaksi', 'bantuan',
-                'hubungi kami', 'pusat bantuan', 'verifikasi', 'keamanan',
-                'keamanan akun', 'promo saya', 'bonus saya', 'turnover deposit saya',
-                'tingkat anggota', 'ini', 'dan', 'dari', 'atau', 'dengan', 'untuk', 'baru',
-                'silver', 'gold', 'platinum', 'bronze', 'diamond', 'vip'
-            ]);
-
-            const isValidUser = (text) => {
-                if (!text) return false;
-                const t = undoTranslateUsername(text).trim();
-                if (t.length < 3 || t.length > 24) return false;
-                if (!/^[a-zA-Z0-9_]+$/.test(t)) return false;
-                if (blacklist.has(t.toLowerCase())) return false;
-                return true;
-            };
-
-            // UG/Qwik sites (jajanwin etc): no REST username API.
-            // Live globals: window.memberId, window.getMemberName()
-            try {
-                if (typeof window.getMemberName === 'function') {
-                    const gn = String(window.getMemberName() || '').trim();
-                    if (isValidUser(gn)) return lockUsername(gn, 'getMemberName()');
-                }
-            } catch (_) {}
-            try {
-                const mid = (window.memberId || '').toString().trim();
-                if (isValidUser(mid)) return lockUsername(mid, 'memberId');
-            } catch (_) {}
-
-            const fromWin = (
-                window.UG_USERNAME ||
-                window.__UG_USERNAME__ ||
-                window.memberUsername ||
-                ''
-            ).toString().trim();
-            if (isValidUser(fromWin)) return lockUsername(fromWin, 'window');
-
-            for (const store of [localStorage, sessionStorage]) {
-                try {
-                    for (const key of ['username', 'user_name', 'member_username', 'login_name', 'account']) {
-                        const raw = store.getItem(key);
-                        if (!raw) continue;
-                        let val = raw;
-                        try {
-                            const parsed = JSON.parse(raw);
-                            val = parsed?.username || parsed?.user_name || parsed?.name || raw;
-                        } catch (_) {}
-                        if (isValidUser(String(val))) return lockUsername(String(val), `storage:${key}`);
-                    }
-                } catch (_) {}
+            const el = findPageContentUsernameNode();
+            if (!el) {
+                console.warn('⚠️ [UG-QRIS] Username NOT found - #pageContent .mb-2 missing');
+                return null;
             }
 
-            const dataEl = document.querySelector('[data-username], [data-user], [data-member-username]');
-            if (dataEl) {
-                const dv = dataEl.getAttribute('data-username')
-                    || dataEl.getAttribute('data-user')
-                    || dataEl.getAttribute('data-member-username');
-                if (isValidUser(dv)) {
-                    protectUsernameNode(dataEl);
-                    return lockUsername(dv, 'data-attr');
-                }
+            protectUsernameNode(el);
+            const text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!isValidUser(text)) {
+                console.warn('⚠️ [UG-QRIS] Username NOT found - invalid #pageContent .mb-2:', text);
+                return null;
             }
-
-            const walletEl = document.querySelector('.walletBalanceText, [class*="walletBalanceText"]');
-            if (walletEl) {
-                const section = walletEl.closest('[class*="section"]') || walletEl.parentElement;
-                if (section) {
-                    const candidates = section.querySelectorAll('div[class*="mb-2"]');
-                    for (const div of candidates) {
-                        if (div.classList.contains('subtitle')) continue;
-                        if (/\bsubtitle\b/i.test(div.className || '')) continue;
-                        if (div.querySelector('.levelText, [class*="levelText"], .walletBalanceText')) continue;
-                        const text = (div.textContent || '').replace(/\s+/g, ' ').trim();
-                        if (isValidUser(text)) {
-                            protectUsernameNode(div);
-                            return lockUsername(text, 'near wallet');
-                        }
-                    }
-                }
-            }
-
-            const levelEl = document.querySelector('.levelText, [class*="levelText"]');
-            if (levelEl) {
-                const wrap = levelEl.closest('div')?.parentElement;
-                if (wrap) {
-                    const mb2 = wrap.querySelector('div[class*="mb-2"]:not(.subtitle)');
-                    if (mb2) {
-                        const text = (mb2.textContent || '').replace(/\s+/g, ' ').trim();
-                        if (isValidUser(text)) {
-                            protectUsernameNode(mb2);
-                            return lockUsername(text, 'near level');
-                        }
-                    }
-                }
-            }
-
-            const allDivs = document.querySelectorAll('div[class*="mb-2"]');
-            for (const div of allDivs) {
-                if (div.classList.contains('subtitle') || /\bsubtitle\b/i.test(div.className || '')) continue;
-                if (div.children.length > 0) continue;
-                const text = (div.textContent || '').replace(/\s+/g, ' ').trim();
-                if (isValidUser(text)) {
-                    protectUsernameNode(div);
-                    return lockUsername(text, 'scan');
-                }
-            }
-
-            console.warn('⚠️ [UG-QRIS] Username NOT found - will NOT inject');
-            return null;
+            return lockUsername(text, 'pageContent.mb-2', el);
         } catch (error) {
             console.error('❌ [UG-QRIS] Error getting username:', error);
             return null;
@@ -322,13 +285,69 @@
         }
     }
 
+    const SKIP_STORE_KEY = true; // TODO: set false when store_key live + health ON
+
     const STORE_KEY = (
         getParamFromCurrentScript('store_key') ||
         window.PGSCRIPT_STORE_KEY ||
-        'sk_fbbcd3f985e78e5b4d128e31641fdff6'
+        ''
     ).trim();
 
-    if (STORE_KEY) {
+    function parseAmountParam(v, fallback) {
+        const n = parseInt(String(v == null ? '' : v).replace(/\D/g, ''), 10);
+        return Number.isFinite(n) && n > 0 ? n : fallback;
+    }
+
+    function parseButtonList(raw) {
+        const src = raw || window.UG_AMOUNT_BUTTONS || '';
+        let nums = [];
+        if (Array.isArray(src)) {
+            nums = src.map((x) => parseInt(x, 10));
+        } else if (typeof src === 'string' && src.trim()) {
+            nums = src.split(/[,|;\s]+/).map((x) => parseInt(String(x).replace(/\D/g, ''), 10));
+        }
+        nums = nums.filter((n) => Number.isFinite(n) && n > 0);
+        if (!nums.length) nums = [20000, 50000, 100000, 200000, 500000];
+        return nums;
+    }
+
+    CONFIG.MIN_AMOUNT = parseAmountParam(
+        getParamFromCurrentScript('min_depo') || window.UG_MIN_DEPO,
+        20000
+    );
+    CONFIG.MAX_AMOUNT = parseAmountParam(
+        getParamFromCurrentScript('max_depo') || window.UG_MAX_DEPO,
+        10000000
+    );
+    if (CONFIG.MAX_AMOUNT < CONFIG.MIN_AMOUNT) {
+        CONFIG.MAX_AMOUNT = CONFIG.MIN_AMOUNT;
+    }
+    CONFIG.AMOUNT_BUTTONS = parseButtonList(
+        getParamFromCurrentScript('buttons') || getParamFromCurrentScript('amounts')
+    ).filter((n) => n >= CONFIG.MIN_AMOUNT && n <= CONFIG.MAX_AMOUNT);
+    if (!CONFIG.AMOUNT_BUTTONS.length) {
+        CONFIG.AMOUNT_BUTTONS = [CONFIG.MIN_AMOUNT];
+    }
+
+    function formatRpLabel(n) {
+        return 'Rp ' + Number(n).toLocaleString('id-ID');
+    }
+
+    function amountButtonsHtml() {
+        return CONFIG.AMOUNT_BUTTONS.map((n) =>
+            `<button type="button" class="qris-amount-btn" data-amount="${n}">${formatRpLabel(n)}</button>`
+        ).join('\n');
+    }
+
+    console.log('[UG-QRIS] amounts', {
+        min: CONFIG.MIN_AMOUNT,
+        max: CONFIG.MAX_AMOUNT,
+        buttons: CONFIG.AMOUNT_BUTTONS
+    });
+
+    if (SKIP_STORE_KEY) {
+        console.log('[UG-QRIS] store_key SKIP (health bypass ON)');
+    } else if (STORE_KEY) {
         console.log('[UG-QRIS] store_key loaded from script/config');
     }
 
@@ -365,6 +384,10 @@
     ).toString().trim();
 
     async function checkPaymentHealth() {
+        if (SKIP_STORE_KEY) {
+            return true;
+        }
+
         if (!STORE_KEY) {
             console.log('[Deposit is disabled]');
             console.warn('❌ [UG-QRIS] store_key missing — tambahkan ?store_key=... di script src');
@@ -1023,11 +1046,7 @@
                             <label>Jumlah Deposit</label>
                             
                             <div class="qris-amount-buttons" id="ug-amount-buttons">
-                                <button type="button" class="qris-amount-btn" data-amount="10000">Rp 10.000</button>
-                                <button type="button" class="qris-amount-btn" data-amount="20000">Rp 20.000</button>
-                                <button type="button" class="qris-amount-btn" data-amount="50000">Rp 50.000</button>
-                                <button type="button" class="qris-amount-btn" data-amount="100000">Rp 100.000</button>
-                                <button type="button" class="qris-amount-btn" data-amount="500000">Rp 500.000</button>
+                                ${amountButtonsHtml()}
                             </div>
                             
                             <div class="qris-input-group">
