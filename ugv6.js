@@ -1,16 +1,17 @@
 // ============================================================================
 // UG QRIS POPPAY INJECTION - ugv6.js
-// BOB RESEARCH LABS - v6.0.0 (pg-ppy-sdk + payment-health-v2)
+// BOB RESEARCH LABS - v6.0.2 (pg-ppy-sdk + jajanwin palette, no promo)
 // SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
 // Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
 // Embed: <script src="https://cdn.jsdelivr.net/gh/pgppy/ppy@main/ugv6.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000"></script>
 // Username: window.getMemberName() / window.memberId first + readonly form field
+// Theme: body #2D0017 / primary #E577DE / text #EBDFE6 (match money site)
 // ============================================================================
 
 (function () {
     'use strict';
 
-    console.log('🚀 [UG-QRIS-POPPAY] Starting ugv6 v6.0.0 (memberId + username readonly)...');
+    console.log('🚀 [UG-QRIS-POPPAY] Starting ugv6 v6.0.2 (no promo)...');
 
     // ========================================================================
     // Global Amount Setter (Direct onclick - accessible from HTML)
@@ -277,101 +278,6 @@
     }
 
     // ========================================================================
-    // Fetch Promotion List
-    // ========================================================================
-    async function fetchPromotionList() {
-        try {
-            console.log('🎁 [UG-QRIS] Fetching promotion list...');
-
-            const response = await fetch('/getDepositPromotionList', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'text/plain;charset=UTF-8',
-                },
-                body: JSON.stringify({
-                    bank_id: "",
-                    method: 9
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-
-            const data = await response.json();
-            console.log('✅ [UG-QRIS] Promotions loaded:', data);
-            return data;
-        } catch (error) {
-            console.error('❌ [UG-QRIS] Error fetching promotions:', error);
-            return null;
-        }
-    }
-
-    // ========================================================================
-    // Populate Promotion Select
-    // ========================================================================
-    async function populatePromotionSelect() {
-        const select = document.getElementById('depositPromotionAutoQris');
-        if (!select) {
-            console.warn('⚠️ [UG-QRIS] Promotion select not found');
-            return;
-        }
-
-        const response = await fetchPromotionList();
-
-        // Clear loading option
-        select.innerHTML = '<option value="">Pilih Promosi (Opsional)</option>';
-
-        // Check if promotion is disabled (is_show_promo: false)
-        if (response && response.d && response.d.is_show_promo === false) {
-            console.warn('⚠️ [UG-QRIS] Promotions disabled');
-            const message = response.d.notes || 'Promosi tidak diizinkan';
-            select.innerHTML = `<option value="" disabled>${message}</option>`;
-            select.disabled = true;
-            select.style.opacity = '0.6';
-            select.style.cursor = 'not-allowed';
-            return;
-        }
-
-        // Check correct response structure: response.d.promotions
-        if (!response || !response.d || !response.d.promotions || !Array.isArray(response.d.promotions)) {
-            console.warn('⚠️ [UG-QRIS] No promotions available');
-            select.innerHTML += '<option value="" disabled>Tidak ada promosi</option>';
-            return;
-        }
-
-        const promotions = response.d.promotions;
-
-        // Check if promotions array is empty
-        if (promotions.length === 0) {
-            console.warn('⚠️ [UG-QRIS] No promotions available');
-            select.innerHTML = '<option value="" disabled>Tidak ada promosi tersedia</option>';
-            select.disabled = true;
-            select.style.opacity = '0.6';
-            return;
-        }
-
-        // Populate with promotions
-        promotions.forEach(promo => {
-            const option = document.createElement('option');
-            // Use promo_code as value
-            option.value = promo.promo_code || promo.code || '';
-            // Use title as display text
-            option.textContent = promo.title || promo.name || promo.promo_code;
-
-            // Store min amount in data attribute
-            if (promo.min) {
-                option.setAttribute('data-min', promo.min);
-                option.textContent += ` (Min: Rp ${parseInt(promo.min).toLocaleString('id-ID')})`;
-            }
-
-            select.appendChild(option);
-        });
-
-        console.log(`✅ [UG-QRIS] ${promotions.length} promotions loaded to select`);
-    }
-
-    // ========================================================================
     // Check if Username Exists (Pre-Injection Validation)
     // ========================================================================
     async function validateUsernameExists() {
@@ -399,7 +305,7 @@
                 .map((s) => s.src)
                 .reverse();
             const named = current?.src || scripts.find((url) =>
-                /ug(?:v4|v2|v1|script|instant|1)?\.js(\?|$)|ug_test_simple\.js(\?|$)/i.test(url)
+                /ugv[0-9]+\.js(\?|$)|ug(?:script|instant|1)?\.js(\?|$)|ug_test_simple\.js(\?|$)/i.test(url)
             );
             const src = named || scripts.find((url) => {
                 try {
@@ -419,7 +325,7 @@
     const STORE_KEY = (
         getParamFromCurrentScript('store_key') ||
         window.PGSCRIPT_STORE_KEY ||
-        ''
+        'sk_fbbcd3f985e78e5b4d128e31641fdff6'
     ).trim();
 
     if (STORE_KEY) {
@@ -776,12 +682,12 @@
                 
                 /* Debug indicator - shows injection is active */
                 #ug-poppay-qris-full::before {
-                    content: '🔒 QRIS Automation Poppay Active';
+                    content: 'QRIS Instant Active';
                     position: absolute;
                     top: -5px;
                     right: 0;
-                    background: rgba(76, 175, 80, 0.15);
-                    color: #4CAF50;
+                    background: rgba(229, 119, 222, 0.18);
+                    color: #E577DE;
                     font-size: 10px;
                     padding: 2px 6px;
                     border-radius: 3px;
@@ -802,19 +708,20 @@
                 }
                 
                 .qris-manual-wrapper {
-                    background: #1a1a1a;
-                    color: #fff;
+                    background: #2D0017;
+                    color: #EBDFE6;
                     padding: ${CONFIG.IS_MOBILE ? '12px' : '25px'};
                     border-radius: ${CONFIG.IS_MOBILE ? '8px' : '12px'};
                     margin-bottom: ${CONFIG.IS_MOBILE ? '10px' : '25px'};
-                    box-shadow: 0 4px 16px rgba(0,0,0,0.35);
-                    border: 1px solid #333;
+                    box-shadow: 0 4px 16px rgba(45, 0, 23, 0.45);
+                    border: 1px solid rgba(227, 179, 203, 0.16);
                     max-width: 100%;
                     width: 100%;
                     overflow-x: hidden;
                     position: relative;
                     box-sizing: border-box;
                     color-scheme: dark;
+                    font-family: poppins, poppins-fallback, sans-serif;
                 }
                 
                 @media (max-width: 768px) {
@@ -827,11 +734,11 @@
                 .qris-manual-header {
                     margin-bottom: 20px;
                     padding-bottom: 15px;
-                    border-bottom: 2px solid #333;
+                    border-bottom: 2px solid rgba(227, 179, 203, 0.16);
                 }
                 
                 .qris-manual-header h5 {
-                    color: #fff;
+                    color: #EBDFE6;
                     font-weight: 600;
                     margin: 0;
                     display: flex;
@@ -850,18 +757,18 @@
                     width: 24px;
                     height: 24px;
                     margin-right: 10px;
-                    color: #4CAF50;
+                    color: #E577DE;
                     font-size: 20px;
                 }
                 
                 .qris-manual-header p {
-                    color: #aaa;
+                    color: #AE95A5;
                     font-size: 13px;
                     margin: 8px 0 0 0;
                 }
                 
                 .qris-form label {
-                    color: #ddd;
+                    color: #EBDFE6;
                     font-weight: 500;
                     margin-bottom: 8px;
                     display: block;
@@ -869,20 +776,21 @@
 
                 .qris-input.qris-username-readonly,
                 #depositUsernameAutoQris {
-                    background: #1a1a1a !important;
-                    color: #4CAF50 !important;
-                    border: 1px solid #333 !important;
+                    background: #1A000E !important;
+                    color: #E577DE !important;
+                    border: 1px solid rgba(227, 179, 203, 0.28) !important;
                     cursor: default !important;
                     font-weight: 600;
                     letter-spacing: 0.3px;
                     caret-color: transparent;
+                    border-radius: 6px !important;
                 }
 
                 .qris-input.qris-username-readonly:focus,
                 #depositUsernameAutoQris:focus {
                     outline: none !important;
                     box-shadow: none !important;
-                    border-color: #444 !important;
+                    border-color: rgba(229, 119, 222, 0.45) !important;
                 }
                 
                 .qris-amount-buttons {
@@ -905,9 +813,9 @@
                 
                 .qris-amount-btn {
                     padding: ${CONFIG.IS_MOBILE ? '10px 8px' : '8px 16px'};
-                    border: 1px solid #444;
-                    background: #2a2a2a;
-                    color: #fff;
+                    border: 1px solid rgba(227, 179, 203, 0.22);
+                    background: rgba(217, 170, 194, 0.08);
+                    color: #EBDFE6;
                     border-radius: 6px;
                     cursor: pointer;
                     font-size: ${CONFIG.IS_MOBILE ? '12px' : '14px'};
@@ -942,15 +850,15 @@
                 }
                 
                 .qris-amount-btn:hover {
-                    background: #4CAF50;
-                    color: #fff;
-                    border-color: #4CAF50;
+                    background: #E577DE;
+                    color: #2D0017;
+                    border-color: #E577DE;
                 }
                 
                 .qris-amount-btn.active {
-                    background: #4CAF50 !important;
-                    color: #fff !important;
-                    border-color: #4CAF50 !important;
+                    background: #E577DE !important;
+                    color: #2D0017 !important;
+                    border-color: #E577DE !important;
                 }
                 
                 .qris-amount-btn:active {
@@ -965,12 +873,12 @@
                 }
                 
                 .qris-input-prefix {
-                    background: #2a2a2a;
+                    background: #1A000E;
                     padding: 12px ${CONFIG.IS_MOBILE ? '12px' : '16px'};
-                    border: 1px solid #444;
+                    border: 1px solid rgba(227, 179, 203, 0.28);
                     border-right: none;
                     border-radius: 6px 0 0 6px;
-                    color: #888;
+                    color: #AE95A5;
                     font-weight: 500;
                     flex-shrink: 0;
                     min-width: ${CONFIG.IS_MOBILE ? '40px' : '50px'};
@@ -983,18 +891,18 @@
                     flex: 1;
                     min-width: 0;
                     padding: 12px ${CONFIG.IS_MOBILE ? '12px' : '16px'};
-                    border: 1px solid #444;
+                    border: 1px solid rgba(227, 179, 203, 0.28);
                     border-radius: 0 6px 6px 0;
                     font-size: ${CONFIG.IS_MOBILE ? '14px' : '16px'};
                     width: 100%;
                     box-sizing: border-box;
-                    background: #2a2a2a;
-                    color: #fff;
+                    background: #1A000E;
+                    color: #EBDFE6;
                 }
                 
                 .qris-input:focus {
                     outline: none;
-                    border-color: #4CAF50;
+                    border-color: #E577DE;
                 }
                 
                 select.qris-input {
@@ -1003,20 +911,20 @@
                 }
                 
                 .qris-input::placeholder {
-                    color: #666;
+                    color: #AE95A5;
                 }
                 
                 .qris-input-hint {
                     font-size: 12px;
-                    color: #888;
+                    color: #AE95A5;
                     margin-top: 5px;
                 }
                 
                 .qris-submit-btn {
                     width: 100%;
                     padding: ${CONFIG.IS_MOBILE ? '16px' : '14px'};
-                    background: #4CAF50;
-                    color: white;
+                    background: #E577DE;
+                    color: #2D0017;
                     border: none;
                     border-radius: 6px;
                     font-size: ${CONFIG.IS_MOBILE ? '15px' : '16px'};
@@ -1033,40 +941,31 @@
                 }
                 
                 .qris-submit-btn:hover {
-                    background: #45a049;
+                    background: #F08AE8;
+                    color: #2D0017;
                 }
                 
                 .qris-submit-btn:disabled {
-                    background: #444;
-                    color: #888;
+                    background: rgba(217, 170, 194, 0.18);
+                    color: #AE95A5;
                     cursor: not-allowed;
-                }
-                
-                #ug-promo-warning {
-                    background: rgba(255, 193, 7, 0.12);
-                    border: 1px solid #ffc107;
-                    color: #ffe082;
-                    padding: 10px;
-                    border-radius: 6px;
-                    margin-top: 10px;
-                    font-size: 13px;
                 }
                 
                 .ug-qris-success-box {
                     padding: 20px;
-                    background: rgba(76, 175, 80, 0.15);
-                    border: 2px solid #4CAF50;
+                    background: rgba(229, 119, 222, 0.15);
+                    border: 2px solid #E577DE;
                     border-radius: 8px;
                     margin-top: 15px;
                 }
                 
                 .ug-qris-success-box h4 {
-                    color: #b9f6ca;
+                    color: #F3C4EF;
                     margin: 0 0 10px 0;
                 }
                 
                 .ug-qris-success-box p {
-                    color: #a5d6a7;
+                    color: #EBDFE6;
                     margin: 0;
                 }
                 
@@ -1143,15 +1042,6 @@
                             <input type="hidden" id="depositAmountAutoQris" value="">
                             
                             <small class="qris-input-hint">Min: Rp ${CONFIG.MIN_AMOUNT.toLocaleString('id-ID')} | Max: Rp ${CONFIG.MAX_AMOUNT.toLocaleString('id-ID')}</small>
-                        </div>
-                        
-                        <div class="form-group mb-3">
-                            <label>Promosi (Opsional)</label>
-                            <select class="qris-input" id="depositPromotionAutoQris">
-                                <option value="">Pilih Promosi (Opsional)</option>
-                                <option value="loading" disabled>Loading...</option>
-                            </select>
-                            <small class="qris-input-hint">Pilih promosi yang tersedia atau biarkan kosong</small>
                         </div>
                         
                         <button type="submit" class="qris-submit-btn">
@@ -1237,12 +1127,6 @@
                 amountHidden.value = amount;
 
                 console.log('[UG-QRIS] ✅ SUCCESS! Set to:', formatted);
-
-                // Trigger promotion validation check
-                setTimeout(() => {
-                    const evt = new Event('input', { bubbles: true });
-                    amountHidden.dispatchEvent(evt);
-                }, 50);
 
                 return true;
             } else {
@@ -1390,11 +1274,6 @@
             console.error('❌ [UG-QRIS] Failed to fill username field:', err);
         });
 
-        // Load promotions
-        populatePromotionSelect().catch(err => {
-            console.error('❌ [UG-QRIS] Failed to load promotions:', err);
-        });
-
         // Amount input handler - untuk manual typing
         if (amountShow) {
             amountShow.addEventListener('input', function (e) {
@@ -1406,82 +1285,8 @@
 
                 // Remove active class from buttons when typing
                 document.querySelectorAll('.qris-amount-btn').forEach(b => b.classList.remove('active'));
-
-                // Check promotion min validation
-                checkPromotionMinAmount();
             });
             console.log('[UG-QRIS] ✓ Input handler attached');
-        }
-
-        // Hidden amount field handler - untuk button clicks
-        if (amountHidden) {
-            amountHidden.addEventListener('input', function (e) {
-                // Check promotion min validation when amount changes
-                checkPromotionMinAmount();
-            });
-        }
-
-        // Promotion change handler - check min amount
-        const promotionSelect = document.getElementById('depositPromotionAutoQris');
-        if (promotionSelect) {
-            promotionSelect.addEventListener('change', function (e) {
-                checkPromotionMinAmount();
-            });
-            console.log('[UG-QRIS] ✓ Promotion handler attached');
-        }
-
-        // Function to check promotion min amount and show warning
-        function checkPromotionMinAmount() {
-            const promotionSelect = document.getElementById('depositPromotionAutoQris');
-            const amountHidden = document.getElementById('depositAmountAutoQris');
-            const submitBtn = form.querySelector('.qris-submit-btn');
-
-            if (!promotionSelect || !promotionSelect.value || !amountHidden.value) {
-                // Reset button if no promo selected or no amount
-                if (submitBtn) {
-                    submitBtn.style.opacity = '1';
-                    submitBtn.style.cursor = 'pointer';
-                }
-                return;
-            }
-
-            const selectedOption = promotionSelect.options[promotionSelect.selectedIndex];
-            const promoMin = selectedOption.getAttribute('data-min');
-            const amount = parseInt(amountHidden.value);
-
-            if (promoMin && amount) {
-                const minAmount = parseInt(promoMin);
-
-                if (amount < minAmount) {
-                    // Show visual warning
-                    if (submitBtn) {
-                        submitBtn.style.opacity = '0.6';
-                        submitBtn.style.cursor = 'not-allowed';
-                    }
-
-                    // Show warning text
-                    let warningDiv = document.getElementById('ug-promo-warning');
-                    if (!warningDiv) {
-                        warningDiv = document.createElement('div');
-                        warningDiv.id = 'ug-promo-warning';
-                        warningDiv.style.cssText = 'background: rgba(255,193,7,0.12); border: 1px solid #ffc107; color: #ffe082; padding: 10px; border-radius: 6px; margin-top: 10px; font-size: 13px;';
-                        promotionSelect.parentNode.appendChild(warningDiv);
-                    }
-                    warningDiv.innerHTML = `⚠️ Promosi ini membutuhkan minimal deposit <strong>Rp ${minAmount.toLocaleString('id-ID')}</strong>`;
-                    warningDiv.style.display = 'block';
-                } else {
-                    // Remove warning
-                    if (submitBtn) {
-                        submitBtn.style.opacity = '1';
-                        submitBtn.style.cursor = 'pointer';
-                    }
-
-                    const warningDiv = document.getElementById('ug-promo-warning');
-                    if (warningDiv) {
-                        warningDiv.style.display = 'none';
-                    }
-                }
-            }
         }
 
         // Button onclick sudah di-handle langsung di HTML, ga perlu addEventListener lagi!
@@ -1502,21 +1307,6 @@
             if (amount > CONFIG.MAX_AMOUNT) {
                 alert(`❌ Maksimal deposit Rp ${CONFIG.MAX_AMOUNT.toLocaleString('id-ID')}`);
                 return;
-            }
-
-            // Promotion validation - check min amount
-            const promotionSelect = document.getElementById('depositPromotionAutoQris');
-            if (promotionSelect && promotionSelect.value) {
-                const selectedOption = promotionSelect.options[promotionSelect.selectedIndex];
-                const promoMin = selectedOption.getAttribute('data-min');
-
-                if (promoMin) {
-                    const minAmount = parseInt(promoMin);
-                    if (amount < minAmount) {
-                        alert(`❌ Promosi "${selectedOption.textContent}" membutuhkan minimal deposit Rp ${minAmount.toLocaleString('id-ID')}\n\nSilakan tingkatkan jumlah deposit atau pilih promosi lain.`);
-                        return;
-                    }
-                }
             }
 
             // Disable button
@@ -1562,13 +1352,9 @@
                 }
                 console.log('[UG-QRIS] Container verified:', container);
 
-                // Get promotion value
-                const promotionSelect = document.getElementById('depositPromotionAutoQris');
-                const promotion = promotionSelect && promotionSelect.value ? promotionSelect.value : null;
-
                 // Create payment - ALWAYS NEW invoice
                 const invoice = 'UG-' + Date.now();
-                console.log('💳 [UG-QRIS] Creating payment:', { amount, username, invoice, promotion });
+                console.log('💳 [UG-QRIS] Creating payment:', { amount, username, invoice });
 
                 // pg-ppy-sdk: auth via store_key (bukan x-domain)
                 const sdkConfig = {
@@ -1585,12 +1371,6 @@
                     containerId: 'qris-payment-frame',
                     resultContainerId: 'payment-result'
                 };
-
-                // Add promotion if selected (only if not empty)
-                if (promotion) {
-                    sdkConfig.promotion = promotion;
-                    console.log('🎁 [UG-QRIS] Promotion added:', promotion);
-                }
 
                 sdkConfig.onSuccess = (data) => {
                     console.log('✅ [UG-QRIS] Payment success:', data);
@@ -1635,12 +1415,6 @@
             document.getElementById('payment-result').innerHTML = '';
             amountShow.value = '';
             amountHidden.value = '';
-
-            // Reset promotion select
-            const promotionSelect = document.getElementById('depositPromotionAutoQris');
-            if (promotionSelect) {
-                promotionSelect.value = '';
-            }
 
             document.querySelectorAll('.qris-amount-btn').forEach(b => b.classList.remove('active'));
             const submitBtn = form.querySelector('.qris-submit-btn');
