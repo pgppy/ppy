@@ -294,10 +294,15 @@
             <style>
                 #idn-qris-inject-wrap { margin-bottom: 12px; }
                 /* Native .form-deposit-withdraw rules — form pakai class sendiri dulu layout horizontal */
+                #idn-qris-inject-wrap .form-deposit-withdraw {
+                    min-height: 350px;
+                    padding-bottom: 30px;
+                }
                 #idn-qris-inject-wrap .form-deposit-withdraw .form-row {
                     display: flex;
                     flex-wrap: wrap;
                     flex-direction: row;
+                    gap: 20px;
                 }
                 #idn-qris-inject-wrap .form-deposit-withdraw .form-group,
                 #idn-qris-inject-wrap .form-deposit-withdraw .btn-wrapper {
@@ -305,11 +310,13 @@
                     width: 100%;
                     max-width: 100%;
                     box-sizing: border-box;
+                    margin-bottom: 8px;
                 }
                 #idn-qris-inject-wrap .form-deposit-withdraw .btn-wrapper {
                     display: flex;
                     flex-direction: column;
                     gap: 12px;
+                    margin-top: 12px;
                 }
                 #idn-qris-inject-wrap .idn-qris-panel__title {
                     color: #fff;
@@ -331,6 +338,20 @@
                 }
                 #idn-qris-inject-wrap .idn-qris-success-box h4 { margin: 0 0 8px; font-size: 16px; }
                 #idn-qris-inject-wrap .idn-qris-success-box p { margin: 0; font-size: 14px; }
+                
+                /* Mobile optimization */
+                @media (max-width: 768px) {
+                    #idn-qris-inject-wrap .form-deposit-withdraw {
+                        min-height: 350px;
+                        padding-bottom: 30px;
+                    }
+                    #idn-qris-inject-wrap .form-deposit-withdraw .form-row {
+                        gap: 18px;
+                    }
+                    #idn-qris-inject-wrap .form-deposit-withdraw .btn-wrapper {
+                        margin-top: 10px;
+                    }
+                }
             </style>
             <div class="content-page__container content-page__container--bg" id="idn-qris-inject-panel" data-idn-isolated="true">
                 <div class="idn-qris-panel__title" id="idnQrisPanelTitle">${PANEL_TITLE}</div>
