@@ -8,31 +8,15 @@
     'use strict';
 
     const LOG = '[BVS-QRIS]';
-    const VERSION = '1.0.4';
+    const VERSION = '1.0.7';
     const PANEL_TITLE = 'DEPOSIT CEPAT (QRIS)';
     const SDK_URL = 'https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
 
     if (window.__BVS_QRIS_INJECT_BOOTED__) {
-        window.__BVS_QRIS_TAB__ = 'manual';
-        const wrap = document.getElementById('bvs-qris-inject-wrap');
-        const mount = document.querySelector('#confirm-form .detail-box')
-            || document.querySelector('#confirm-form');
-        if (wrap && mount && wrap.parentElement !== mount) {
-            mount.insertBefore(wrap, mount.firstChild);
+        if (typeof window.__BVS_QRIS_RESHOW__ === 'function') {
+            try { window.__BVS_QRIS_RESHOW__(); } catch (_) {}
         }
-        if (wrap) {
-            wrap.classList.add('bvs-qris-hidden');
-            wrap.style.display = 'none';
-        }
-        const depositOption = document.querySelector('#confirm-form .deposit-option');
-        const submitBtn = document.querySelector('#confirm-form button.btn-submit');
-        if (depositOption) depositOption.style.display = '';
-        if (submitBtn) submitBtn.style.display = '';
-        const manualTab = document.querySelector('.depomanual');
-        if (manualTab) {
-            try { manualTab.click(); } catch (_) {}
-        }
-        console.log(LOG, 'Already booted — restored Manual tab');
+        console.log(LOG, 'Already booted');
         return LOG + ' already booted';
     }
     window.__BVS_QRIS_INJECT_BOOTED__ = true;
@@ -222,11 +206,22 @@
 
     function readG8Names() {
         const names = [];
-        document.querySelectorAll('.header-mdl__login-account .g8-name, header .g8-name, span.g8-name').forEach((el) => {
+        document.querySelectorAll('span.g8-name, .g8-name').forEach((el) => {
             const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
             if (isValidUser(t)) names.push(t);
         });
         return names;
+    }
+
+    function readWelcomeName() {
+        const blob = (
+            (document.querySelector('.header, header, .nav-mobile, .m-header') || {}).innerText
+            || (document.body && document.body.innerText)
+            || ''
+        ).slice(0, 600);
+        const m = blob.match(/Selamat\s+Datang[,:\s]+([a-zA-Z0-9._@-]{3,40})/i);
+        if (m && isValidUser(m[1])) return m[1];
+        return '';
     }
 
     function getUsername() {
@@ -246,7 +241,9 @@
             return lockUsername(unique[0], 'span.g8-name (first)');
         }
 
-        console.warn(LOG, 'Username not found — expected span.g8-name in header');
+        const welcome = readWelcomeName();
+        if (welcome) return lockUsername(welcome, 'Selamat Datang');
+
         return '';
     }
 
@@ -259,13 +256,24 @@
     }
 
     function waitAndLockUsername(tries) {
-        const left = tries == null ? 12 : tries;
+        const left = tries == null ? 25 : tries;
         const u = getUsername();
         if (u) {
             applyUsernameToForm(u);
             return;
         }
         if (left > 0) setTimeout(() => waitAndLockUsername(left - 1), 400);
+        else console.warn(LOG, 'Username not found — expected span.g8-name in header');
+    }
+
+    function watchUsername() {
+        if (window.__BVS_QRIS_USER_WATCH__) return;
+        window.__BVS_QRIS_USER_WATCH__ = true;
+        const obs = new MutationObserver(() => {
+            if (!lockedUsername) waitAndLockUsername(1);
+        });
+        const root = document.querySelector('header') || document.body;
+        if (root) obs.observe(root, { childList: true, characterData: true, subtree: true });
     }
 
     function formatAmountDisplay(n) {
@@ -292,17 +300,22 @@
                     #bvs-qris-inject-wrap {
                         width: 100%;
                         box-sizing: border-box;
-                        padding: 8px 0 18px;
-                        min-height: 220px;
+                        padding: 14px 12px 18px;
+                        min-height: 180px;
                         position: relative;
                         z-index: 20;
+                        color: #f3f3f3 !important;
+                        background: #141414;
+                        border: 1px solid #2e2e2e;
+                        border-radius: 8px;
                     }
                     #bvs-qris-inject-wrap.bvs-qris-hidden { display: none !important; }
+                    #bvs-qris-inject-wrap * { box-sizing: border-box; }
                     #bvs-qris-inject-wrap .bvs-qris-panel__title {
-                        color: #fbb11a;
+                        color: #fbb11a !important;
                         font-size: 16px;
-                        font-weight: 600;
-                        padding: 12px 0 8px;
+                        font-weight: 700;
+                        padding: 4px 0 10px;
                         margin: 0;
                         text-align: center;
                     }
@@ -315,31 +328,43 @@
                         display: block;
                         margin-bottom: 8px;
                         font-size: 14px;
-                        font-weight: 500;
+                        font-weight: 600;
+                        color: #f3f3f3 !important;
                     }
                     #bvs-qris-inject-wrap .form-control {
                         width: 100%;
-                        padding: 10px 14px;
-                        border: 1px solid #ddd;
+                        max-width: 100%;
+                        padding: 12px 14px;
+                        border: 1px solid #3a3a3a !important;
                         border-radius: 4px;
-                        font-size: 14px;
+                        font-size: 16px;
                         box-sizing: border-box;
+                        background: #1f1f1f !important;
+                        color: #ffffff !important;
                     }
                     #bvs-qris-inject-wrap .form-control:disabled {
-                        background: #f5f5f5;
-                        color: #666;
+                        background: #1f1f1f !important;
+                        color: #fbb11a !important;
+                        opacity: 1;
+                        -webkit-text-fill-color: #fbb11a;
+                    }
+                    #bvs-qris-inject-wrap .bvs-qris-hint {
+                        font-size: 12px;
+                        margin-top: 6px;
+                        color: #c8c8c8 !important;
                     }
                     #bvs-qris-inject-wrap .button {
                         width: 100%;
-                        padding: 12px 20px;
-                        background: #fbb11a;
-                        color: #000;
+                        padding: 14px 20px;
+                        background: #fbb11a !important;
+                        color: #111 !important;
                         border: none;
                         border-radius: 4px;
                         font-size: 16px;
-                        font-weight: 600;
+                        font-weight: 700;
                         cursor: pointer;
-                        transition: background 0.3s;
+                        -webkit-tap-highlight-color: transparent;
+                        touch-action: manipulation;
                     }
                     #bvs-qris-inject-wrap .button:hover {
                         background: #e9a010;
@@ -373,7 +398,7 @@
                         <input type="text" id="bvsDepositInput" placeholder="Rp 0"
                             class="form-control" autocomplete="off" inputmode="numeric">
                         <input type="hidden" id="bvsDepositAmountHidden" name="amount" value="0">
-                        <div style="font-size: 12px; margin-top: 5px;">${amountHintText()}</div>
+                        <div class="bvs-qris-hint">${amountHintText()}</div>
                     </div>
                     
                     <button type="submit" class="button" id="bvsQrisSubmitBtn">
@@ -388,17 +413,49 @@
             </div>`;
     }
 
+    function isShown(el) {
+        if (!el) return false;
+        const s = getComputedStyle(el);
+        return s.display !== 'none' && s.visibility !== 'hidden' && (el.offsetWidth + el.offsetHeight) > 0;
+    }
+
+    function visibleQ(sel) {
+        return Array.from(document.querySelectorAll(sel)).find(isShown) || null;
+    }
+
     function findMountTarget() {
-        const detailBox = document.querySelector('#confirm-form .detail-box');
-        if (detailBox) return detailBox;
+        return visibleQ('.depo-select-wrap')
+            || visibleQ('#confirm-form .detail-box')
+            || visibleQ('.funds__detail-right .detail-box')
+            || visibleQ('.detail-box')
+            || document.querySelector('#confirm-form, form.depo-select-form')
+            || null;
+    }
+
+    function placeWrap(node) {
+        if (!node) return false;
+        const tabStrip = visibleQ('.depo-select-wrap');
+        if (tabStrip) {
+            if (node.previousElementSibling !== tabStrip) {
+                tabStrip.insertAdjacentElement('afterend', node);
+            }
+            return true;
+        }
+        const detailBox = visibleQ('#confirm-form .detail-box')
+            || visibleQ('.funds__detail-right .detail-box')
+            || visibleQ('.detail-box');
+        if (detailBox) {
+            if (node.parentElement !== detailBox) {
+                detailBox.insertBefore(node, detailBox.firstChild);
+            }
+            return true;
+        }
         const form = document.querySelector('#confirm-form, form.depo-select-form');
-        if (form) return form;
-        const nodes = Array.from(document.querySelectorAll('.depo-form.cepat'));
-        return nodes.find((el) =>
-            el.classList.contains('form-detail--full')
-            && !el.classList.contains('list-metode')
-            && !el.classList.contains('deposit-option__info')
-        ) || null;
+        if (form && node.parentElement !== form) {
+            form.insertBefore(node, form.firstChild);
+            return true;
+        }
+        return !!node.parentElement;
     }
 
     function tabLooksOn(el) {
@@ -406,9 +463,13 @@
         return /(?:^|\s)(active|on|selected|current)(?:\s|$)/i.test(el.className);
     }
 
+    function visibleEl(sel) {
+        return visibleQ(sel) || document.querySelector(sel);
+    }
+
     function detectCepatFromDom() {
-        const cepatTab = document.querySelector('.depocepat');
-        const manualTab = document.querySelector('.depomanual');
+        const cepatTab = visibleEl('.depocepat');
+        const manualTab = visibleEl('.depomanual');
         if (tabLooksOn(cepatTab) && !tabLooksOn(manualTab)) return true;
         if (tabLooksOn(manualTab) && !tabLooksOn(cepatTab)) return false;
 
@@ -422,14 +483,19 @@
     }
 
     function isCepatTabActive() {
+        const cepatTab = visibleQ('.depocepat');
+        const manualTab = visibleQ('.depomanual');
+        if (tabLooksOn(cepatTab) && !tabLooksOn(manualTab)) return true;
+        if (tabLooksOn(manualTab) && !tabLooksOn(cepatTab)) return false;
         if (window.__BVS_QRIS_TAB__ === 'cepat') return true;
         if (window.__BVS_QRIS_TAB__ === 'manual') return false;
         return detectCepatFromDom();
     }
 
     function unhideAncestors(el) {
-        let p = el;
+        let p = el && el.parentElement;
         while (p && p !== document.body) {
+            if (p.classList && p.classList.contains('depo-select-wrap')) break;
             if (p.classList && p.classList.contains('hide')) p.classList.remove('hide');
             if (p.style && p.style.display === 'none') p.style.display = '';
             p = p.parentElement;
@@ -443,11 +509,33 @@
         if (visible) unhideAncestors(wrap);
     }
 
+    function hideSiblingsAfterWrap(wrap, hide) {
+        if (!wrap) return;
+        const prev = wrap.previousElementSibling;
+        if (!prev || !prev.classList.contains('depo-select-wrap') || !isShown(prev)) return;
+        let sib = wrap.nextElementSibling;
+        while (sib) {
+            if (hide) {
+                if (!sib.hasAttribute('data-bvs-disp')) {
+                    sib.setAttribute('data-bvs-disp', sib.style.display || '');
+                }
+                sib.style.display = 'none';
+            } else if (sib.hasAttribute('data-bvs-disp')) {
+                sib.style.display = sib.getAttribute('data-bvs-disp') || '';
+                sib.removeAttribute('data-bvs-disp');
+            }
+            sib = sib.nextElementSibling;
+        }
+    }
+
     function syncCepatTabUi() {
         const wrap = document.getElementById('bvs-qris-inject-wrap');
+        if (wrap) placeWrap(wrap);
+        bindTabSync();
         const cepatOn = isCepatTabActive();
         const showQris = cepatOn && lastHealthOk;
         setWrapVisible(wrap, showQris);
+        hideSiblingsAfterWrap(wrap, showQris);
 
         document.querySelectorAll('.depo-form.cepat').forEach((el) => {
             if (el.id === 'bvs-qris-inject-wrap' || (wrap && el.contains(wrap))) return;
@@ -472,31 +560,27 @@
     }
 
     function bindTabSync() {
-        if (window.__BVS_QRIS_TABS_BOUND__) return;
-        window.__BVS_QRIS_TABS_BOUND__ = true;
-
-        document.querySelectorAll('.depocepat').forEach((tab) => {
-            tab.addEventListener('click', () => {
-                window.__BVS_QRIS_TAB__ = 'cepat';
-                setTimeout(syncCepatTabUi, 30);
-                setTimeout(syncCepatTabUi, 160);
+        const bind = (nodes, tabName) => {
+            nodes.forEach((tab) => {
+                if (tab.dataset.bvsTabBound) return;
+                tab.dataset.bvsTabBound = tabName;
+                const go = () => {
+                    window.__BVS_QRIS_TAB__ = tabName;
+                    setTimeout(syncCepatTabUi, 30);
+                    setTimeout(syncCepatTabUi, 160);
+                    setTimeout(syncCepatTabUi, 400);
+                };
+                tab.addEventListener('click', go);
+                tab.addEventListener('touchend', go, { passive: true });
             });
-        });
-        document.querySelectorAll('.depomanual').forEach((tab) => {
-            tab.addEventListener('click', () => {
-                window.__BVS_QRIS_TAB__ = 'manual';
-                setTimeout(syncCepatTabUi, 30);
-                setTimeout(syncCepatTabUi, 160);
-            });
-        });
+        };
+        bind(document.querySelectorAll('.depocepat, [data-subtarget=".cepat"]'), 'cepat');
+        bind(document.querySelectorAll('.depomanual, [data-subtarget=".manual"]'), 'manual');
     }
 
     window.__BVS_QRIS_RESHOW__ = function () {
         const wrap = document.getElementById('bvs-qris-inject-wrap');
-        const mount = findMountTarget();
-        if (wrap && mount && wrap.parentElement !== mount) {
-            mount.insertBefore(wrap, mount.firstChild);
-        }
+        if (wrap) placeWrap(wrap);
         bindTabSync();
         syncCepatTabUi();
         return !!document.getElementById('bvsFormDepositQris');
@@ -521,10 +605,9 @@
             }
         }
 
-        if (node.parentElement !== mount) {
-            mount.insertBefore(node, mount.firstChild);
-        }
+        placeWrap(node);
         waitAndLockUsername();
+        watchUsername();
 
         bindTabSync();
         window.__BVS_QRIS_TAB__ = detectCepatFromDom() ? 'cepat' : 'manual';
