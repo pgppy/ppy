@@ -1,14 +1,14 @@
 // ============================================================================
 // BVS QRIS Inject — Replace "Deposit Cepat" tab
 // Embed: /bvsv1.js?store_key=sk_xxx&min_depo=5000&max_depo=10000000
-// SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
+// Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
 // ============================================================================
 
 (function () {
     'use strict';
 
     const LOG = '[BVS-QRIS]';
-    const VERSION = '1.0.3';
+    const VERSION = '1.0.4';
     const PANEL_TITLE = 'DEPOSIT CEPAT (QRIS)';
     const SDK_URL = 'https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
 
@@ -51,7 +51,11 @@
     let lockedUsername = (window.__BVS_LOCKED_USERNAME__ || '').toString().trim();
     let lockedUsernameSource = lockedUsername ? 'previous lock' : '';
     let paymentHealthCache = null;
+    let paymentHealthCacheKey = '';
     let paymentHealthCacheAt = 0;
+    let lastHealthLogged = null;
+    let lastHealthOk = false;
+    let healthMonitorStarted = false;
     const PAYMENT_HEALTH_TTL = 30000;
 
     function parseBool(raw, fallback) {
@@ -64,6 +68,12 @@
 
     function debugLog(...args) {
         if (DEBUG) console.log(LOG, ...args);
+    }
+
+    function logHealthState(ok) {
+        if (lastHealthLogged === ok) return;
+        lastHealthLogged = ok;
+        console.log(ok ? 'DEPOSIT HEALTH ON' : 'DEPOSIT HEALTH OFF');
     }
 
     function getScriptSrc() {
@@ -112,9 +122,78 @@
         INVOICE_PREFIX: getParam('invoice_prefix') || window.BVS_PG_CONFIG.INVOICE_PREFIX || 'BVS-',
         SKIP_STORE_KEY: parseBool(getParam('skip_store_key'), window.BVS_PG_CONFIG.SKIP_STORE_KEY),
         CONVERSION_RATIO: parseFloat(getParam('conversion_ratio') || window.BVS_PG_CONFIG.CONVERSION_RATIO) || 1,
+        HEALTH_BASE: (getParam('health_base') || 'https://payment.pg-poppay.com').replace(/\/+$/, ''),
+        HEALTH_PATH: (getParam('health_path') || '').replace(/^\/+/, ''),
+        HEALTH_URL: (getParam('health_url') || '').replace(/\/+$/, ''),
+        HEALTH_POLL_SEC: parseNum(getParam('health_poll_sec'), 15),
     };
 
     debugLog('Config:', CFG);
+
+    function paymentHealthUrl() {
+        if (CFG.HEALTH_URL) return CFG.HEALTH_URL;
+        const path = CFG.HEALTH_PATH || 'api/payment-health-v2';
+        return `${CFG.HEALTH_BASE}/${path}`;
+    }
+
+    async function checkPaymentHealth(forceRefresh) {
+        if (CFG.SKIP_STORE_KEY || !CFG.STORE_KEY) {
+            lastHealthOk = true;
+            logHealthState(true);
+            return true;
+        }
+        const now = Date.now();
+        if (
+            !forceRefresh
+            && paymentHealthCache !== null
+            && paymentHealthCacheKey === CFG.STORE_KEY
+            && (now - paymentHealthCacheAt) < PAYMENT_HEALTH_TTL
+        ) {
+            lastHealthOk = paymentHealthCache;
+            return paymentHealthCache;
+        }
+        try {
+            const url = paymentHealthUrl();
+            const res = await fetch(url, {
+                method: 'GET',
+                cache: 'no-store',
+                headers: { Accept: 'application/json', 'X-Store-Key': CFG.STORE_KEY },
+            });
+            const body = await res.json().catch(() => ({}));
+            const ok = res.ok && body?.success === true;
+            paymentHealthCache = ok;
+            paymentHealthCacheKey = CFG.STORE_KEY;
+            paymentHealthCacheAt = now;
+            lastHealthOk = ok;
+            logHealthState(ok);
+            debugLog('payment-health-v2', ok ? 'OK' : 'OFF', url, body?.message || '');
+            return ok;
+        } catch (e) {
+            paymentHealthCache = false;
+            paymentHealthCacheKey = CFG.STORE_KEY;
+            paymentHealthCacheAt = now;
+            lastHealthOk = false;
+            logHealthState(false);
+            debugLog('payment-health-v2 error', e);
+            return false;
+        }
+    }
+
+    async function applyHealthAndSync(force) {
+        const ok = await checkPaymentHealth(!!force);
+        syncCepatTabUi();
+        return ok;
+    }
+
+    function startHealthMonitor() {
+        if (healthMonitorStarted || CFG.SKIP_STORE_KEY || !CFG.STORE_KEY) return;
+        healthMonitorStarted = true;
+        const ms = Math.max(5, CFG.HEALTH_POLL_SEC) * 1000;
+        setInterval(() => {
+            applyHealthAndSync(true).catch((e) => debugLog('health poll error', e));
+        }, ms);
+        debugLog('health monitor every', ms / 1000, 's');
+    }
 
     function isValidUser(text) {
         const u = String(text || '').replace(/\s+/g, ' ').trim();
@@ -367,21 +446,23 @@
     function syncCepatTabUi() {
         const wrap = document.getElementById('bvs-qris-inject-wrap');
         const cepatOn = isCepatTabActive();
-        setWrapVisible(wrap, cepatOn);
+        const showQris = cepatOn && lastHealthOk;
+        setWrapVisible(wrap, showQris);
 
         document.querySelectorAll('.depo-form.cepat').forEach((el) => {
             if (el.id === 'bvs-qris-inject-wrap' || (wrap && el.contains(wrap))) return;
-            if (cepatOn) {
+            if (showQris) {
                 el.classList.add('hide');
                 el.style.display = 'none';
             } else {
                 el.style.display = '';
+                if (cepatOn && !lastHealthOk) el.classList.remove('hide');
             }
         });
 
         const submitBtn = document.querySelector('#confirm-form button.btn-submit');
         const depositOption = document.querySelector('#confirm-form .deposit-option');
-        if (cepatOn) {
+        if (showQris) {
             if (depositOption) depositOption.style.display = 'none';
             if (submitBtn) submitBtn.style.display = 'none';
         } else {
@@ -507,6 +588,13 @@
             
             if (amount > CFG.MAX_DEPO) {
                 alert(`Maksimal deposit ${formatRpLabel(CFG.MAX_DEPO)}`);
+                return;
+            }
+
+            const healthOk = await checkPaymentHealth(true);
+            syncCepatTabUi();
+            if (!healthOk) {
+                alert('Layanan QRIS sedang OFF. Coba lagi nanti.');
                 return;
             }
             
@@ -649,6 +737,8 @@
             if (replaceCepatTab()) {
                 attachHandlers();
                 waitAndLockUsername();
+                applyHealthAndSync(true).catch((e) => debugLog('health boot error', e));
+                startHealthMonitor();
                 loadQrisSDK().catch((err) => console.warn(LOG, err.message));
                 return;
             }
