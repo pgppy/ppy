@@ -8,7 +8,7 @@
     'use strict';
 
     const LOG = '[BVS-QRIS]';
-    const VERSION = '1.0.7';
+    const VERSION = '1.0.8';
     const PANEL_TITLE = 'DEPOSIT CEPAT (QRIS)';
     const SDK_URL = 'https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
 
@@ -384,7 +384,7 @@
                     }
                 </style>
                 <div class="bvs-qris-panel__title">${PANEL_TITLE}</div>
-                <form class="bvs-qris-form" id="bvsFormDepositQris" autocomplete="off">
+                <div class="bvs-qris-form" id="bvsFormDepositQris">
                     <input type="hidden" id="bvsQrisUsername" value="${username}">
                     
                     <div class="form-group">
@@ -397,14 +397,14 @@
                         <label><i class="fa fa-credit-card"></i> Jumlah (IDR)</label>
                         <input type="text" id="bvsDepositInput" placeholder="Rp 0"
                             class="form-control" autocomplete="off" inputmode="numeric">
-                        <input type="hidden" id="bvsDepositAmountHidden" name="amount" value="0">
+                        <input type="hidden" id="bvsDepositAmountHidden" value="0">
                         <div class="bvs-qris-hint">${amountHintText()}</div>
                     </div>
                     
-                    <button type="submit" class="button" id="bvsQrisSubmitBtn">
+                    <button type="button" class="button" id="bvsQrisSubmitBtn">
                         <span id="bvsQrisBtnText">TAMPILKAN QRIS</span>
                     </button>
-                </form>
+                </div>
                 
                 <div class="bvs-qris-result" id="bvsQrisResult">
                     <div id="bvs-qris-payment-frame"></div>
@@ -627,34 +627,32 @@
     }
 
     function attachHandlers() {
-        const form = document.getElementById('bvsFormDepositQris');
+        const box = document.getElementById('bvsFormDepositQris');
         const amountInput = document.getElementById('bvsDepositInput');
         const amountHidden = document.getElementById('bvsDepositAmountHidden');
+        const btn = document.getElementById('bvsQrisSubmitBtn');
 
-        if (!form || !amountInput) {
+        if (!box || !amountInput || !btn) {
             console.warn(LOG, 'Form elements not found');
             return;
         }
-        if (form.dataset.bvsBound === '1') return;
-        form.dataset.bvsBound = '1';
-        
-        // Amount input handler
+        if (box.dataset.bvsBound === '1') return;
+        box.dataset.bvsBound = '1';
+
         amountInput.addEventListener('input', (e) => {
             const raw = e.target.value.replace(/[^\d]/g, '');
             const num = parseInt(raw, 10) || 0;
             amountHidden.value = num;
             e.target.value = num > 0 ? formatRpLabel(num) : '';
         });
-        
-        // Form submit
-        form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            if (formSubmitInProgress) {
-                debugLog('Submit already in progress');
-                return;
+
+        async function startQris(e) {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
             }
-            
+            if (formSubmitInProgress) return;
+
             const username = lockedUsername || getUsername();
             const amount = parseInt(amountHidden.value, 10) || 0;
             applyUsernameToForm(username);
@@ -663,12 +661,10 @@
                 alert('Username tidak ditemukan (span.g8-name). Login dulu, lalu refresh.');
                 return;
             }
-            
             if (amount < CFG.MIN_DEPO) {
                 alert(`Minimal deposit ${formatRpLabel(CFG.MIN_DEPO)}`);
                 return;
             }
-            
             if (amount > CFG.MAX_DEPO) {
                 alert(`Maksimal deposit ${formatRpLabel(CFG.MAX_DEPO)}`);
                 return;
@@ -680,13 +676,12 @@
                 alert('Layanan QRIS sedang OFF. Coba lagi nanti.');
                 return;
             }
-            
+
             formSubmitInProgress = true;
-            const btn = document.getElementById('bvsQrisSubmitBtn');
             const btnText = document.getElementById('bvsQrisBtnText');
             btn.disabled = true;
-            btnText.textContent = 'MEMPROSES...';
-            
+            if (btnText) btnText.textContent = 'MEMPROSES...';
+
             try {
                 await showPayment(username, amount);
             } catch (err) {
@@ -696,11 +691,26 @@
             } finally {
                 formSubmitInProgress = false;
                 btn.disabled = false;
-                btnText.textContent = 'TAMPILKAN QRIS';
+                if (btnText) btnText.textContent = 'TAMPILKAN QRIS';
             }
+        }
+
+        btn.addEventListener('click', startQris);
+        amountInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') startQris(e);
         });
-        
-        debugLog('Handlers attached');
+
+        const nativeForm = document.getElementById('confirm-form');
+        if (nativeForm && nativeForm.dataset.bvsBlock !== '1') {
+            nativeForm.dataset.bvsBlock = '1';
+            nativeForm.addEventListener('submit', (e) => {
+                const wrap = document.getElementById('bvs-qris-inject-wrap');
+                if (wrap && !wrap.classList.contains('bvs-qris-hidden') && wrap.style.display !== 'none') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+            }, true);
+        }
     }
 
     function resetQrisForm() {
