@@ -8,15 +8,88 @@
     'use strict';
 
     const LOG = '[BVS-QRIS]';
-    const VERSION = '1.0.9';
+    const VERSION = '1.0.10';
     const PANEL_TITLE = 'DEPOSIT CEPAT (QRIS)';
     const SDK_URL = 'https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
+    const POPPAY_RE = /pop\s*-?pay|pg-poppay/i;
+
+    function isPoppayOption(opt) {
+        if (!opt) return false;
+        const val = String(opt.value || '').trim();
+        const text = String(opt.textContent || opt.innerText || opt.label || '');
+        const bid = String((opt.getAttribute && opt.getAttribute('bid')) || '');
+        if (POPPAY_RE.test(text) || POPPAY_RE.test(val)) return true;
+        if (val === '10396:51' || /^10396(:|$)/.test(val)) return true;
+        if (bid === '51' && /qris/i.test(text)) return true;
+        return false;
+    }
+
+    function stripNativePoppay() {
+        try {
+            const selects = document.querySelectorAll('select[name="bankId"], select.bank-get');
+            selects.forEach((sel) => {
+                Array.from(sel.options || []).forEach((opt) => {
+                    if (!isPoppayOption(opt)) return;
+                    try {
+                        if (sel.value === opt.value) sel.selectedIndex = 0;
+                        opt.remove();
+                    } catch (_) {
+                        opt.disabled = true;
+                        opt.hidden = true;
+                        opt.style.display = 'none';
+                    }
+                });
+                const left = Array.from(sel.options || []).filter((o) => String(o.value || '').trim() && !isPoppayOption(o));
+                const box = sel.closest('.form-detail');
+                if (!box) return;
+                if (!left.length) {
+                    box.setAttribute('data-bvs-poppay-box', '1');
+                    box.style.setProperty('display', 'none', 'important');
+                } else if (box.getAttribute('data-bvs-poppay-box') === '1') {
+                    box.removeAttribute('data-bvs-poppay-box');
+                    box.style.removeProperty('display');
+                }
+            });
+        } catch (_) {}
+    }
+
+    function startPoppayStrip() {
+        stripNativePoppay();
+        if (!window.__BVS_POPPAY_STRIP_TIMER__) {
+            window.__BVS_POPPAY_STRIP_TIMER__ = setInterval(stripNativePoppay, 250);
+        }
+        if (document.documentElement && !window.__BVS_POPPAY_STRIP_OBS__) {
+            try {
+                window.__BVS_POPPAY_STRIP_OBS__ = new MutationObserver(() => stripNativePoppay());
+                window.__BVS_POPPAY_STRIP_OBS__.observe(document.documentElement, { childList: true, subtree: true });
+            } catch (_) {}
+        }
+        if (!window.__BVS_POPPAY_CLICK__) {
+            window.__BVS_POPPAY_CLICK__ = true;
+            document.addEventListener('click', (e) => {
+                if (e.target && e.target.closest && e.target.closest('.row-list-metode, .bank-get, .depo-form')) {
+                    setTimeout(stripNativePoppay, 50);
+                    setTimeout(stripNativePoppay, 300);
+                    setTimeout(stripNativePoppay, 800);
+                }
+            }, true);
+        }
+        if (window.jQuery && !window.__BVS_POPPAY_AJAX__) {
+            window.__BVS_POPPAY_AJAX__ = true;
+            window.jQuery(document).ajaxComplete(() => {
+                setTimeout(stripNativePoppay, 0);
+                setTimeout(stripNativePoppay, 250);
+            });
+        }
+    }
+
+    startPoppayStrip();
 
     if (window.__BVS_QRIS_INJECT_BOOTED__) {
         if (typeof window.__BVS_QRIS_RESHOW__ === 'function') {
             try { window.__BVS_QRIS_RESHOW__(); } catch (_) {}
         }
-        console.log(LOG, 'Already booted');
+        console.log(LOG, 'Already booted — Poppay strip v' + VERSION);
         return LOG + ' already booted';
     }
     window.__BVS_QRIS_INJECT_BOOTED__ = true;
@@ -536,7 +609,7 @@
         const showQris = cepatOn && lastHealthOk;
         setWrapVisible(wrap, showQris);
         hideSiblingsAfterWrap(wrap, showQris);
-        hideNativePoppay();
+        stripNativePoppay();
 
         document.querySelectorAll('.depo-form.cepat').forEach((el) => {
             if (el.id === 'bvs-qris-inject-wrap' || (wrap && el.contains(wrap))) return;
@@ -560,60 +633,12 @@
         }
     }
 
-    const POPPAY_RE = /pop\s*-?pay|pg-poppay/i;
-    const POPPAY_BANK_RE = /^10396(?::|$)/;
-    let poppayHideObserver = null;
-    let poppayHideLogged = false;
-
-    function isPoppayOption(opt) {
-        if (!opt || opt.tagName !== 'OPTION') return false;
-        const val = (opt.value || '').trim();
-        const text = (opt.textContent || opt.label || '').trim();
-        return POPPAY_RE.test(text) || POPPAY_RE.test(val) || POPPAY_BANK_RE.test(val);
-    }
-
     function hideNativePoppay() {
-        const root = document.querySelector('#confirm-form, form.depo-select-form') || document;
-        let n = 0;
-
-        root.querySelectorAll('select[name="bankId"], select.bank-get').forEach((sel) => {
-            Array.from(sel.options).forEach((opt) => {
-                if (!isPoppayOption(opt)) return;
-                if (sel.value === opt.value) sel.selectedIndex = 0;
-                opt.remove();
-                n += 1;
-            });
-        });
-
-        root.querySelectorAll('.btn-img, [data-bid]').forEach((el) => {
-            if (el.getAttribute('data-bvs-poppay-hidden') === '1') return;
-            const img = el.querySelector('img');
-            const label = [
-                el.textContent || '',
-                el.getAttribute('data-name') || '',
-                img ? (img.alt || '') : '',
-                img ? (img.getAttribute('data-name') || '') : '',
-            ].join(' ');
-            if (!POPPAY_RE.test(label)) return;
-            el.style.display = 'none';
-            el.setAttribute('data-bvs-poppay-hidden', '1');
-            n += 1;
-        });
-
-        if (n && !poppayHideLogged) {
-            poppayHideLogged = true;
-            console.log(LOG, 'Native Poppay hidden');
-        }
-        return n;
+        stripNativePoppay();
     }
 
     function watchNativePoppay() {
-        hideNativePoppay();
-        if (poppayHideObserver) return;
-        const form = document.querySelector('#confirm-form, form.depo-select-form');
-        if (!form) return;
-        poppayHideObserver = new MutationObserver(() => hideNativePoppay());
-        poppayHideObserver.observe(form, { childList: true, subtree: true });
+        startPoppayStrip();
     }
 
     function bindTabSync() {
@@ -877,6 +902,7 @@
 
     function init() {
         debugLog('Initializing BVS QRIS inject v' + VERSION);
+        startPoppayStrip();
         
         // Wait for page to be ready
         if (document.readyState === 'loading') {
