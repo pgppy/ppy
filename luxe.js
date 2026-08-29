@@ -8,7 +8,7 @@
     'use strict';
 
     const LOG = '[BVS-QRIS]';
-    const VERSION = '1.1.3';
+    const VERSION = '1.1.4';
     const PANEL_TITLE = 'DEPOSIT CEPAT (QRIS INSTANT)';
     const SDK_URL = 'https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
     const POPPAY_RE = /pop\s*-?pay|pg-poppay/i;
@@ -507,6 +507,7 @@
             '.bvs-qris-cepat-tab{display:flex!important;flex-direction:column!important;',
             'align-items:center!important;justify-content:center!important;',
             'text-align:center!important;position:relative!important;}',
+            '.bvs-qris-cepat-tab.bvs-qris-tab-off{display:none!important;}',
             '.bvs-qris-cepat-tab .icon-menu{position:static!important;margin:0!important;',
             'transform:none!important;display:flex!important;align-items:center!important;',
             'justify-content:center!important;}',
@@ -562,13 +563,34 @@
 
             const label = ours.querySelector('p');
             if (label) label.textContent = 'DEPOSIT CEPAT QRIS INSTANT';
-            ours.style.display = '';
-            if (window.__BVS_QRIS_TAB__ !== 'qris') ours.classList.remove('active');
 
-            if (!isShown(strip) || strip.classList.contains('hide')) {
-                strip.classList.remove('hide');
-                if (strip.style.display === 'none') strip.style.display = '';
-                strip.setAttribute('data-bvs-unhid-strip', '1');
+            if (lastHealthOk) {
+                ours.classList.remove('bvs-qris-tab-off');
+                ours.style.display = '';
+                if (window.__BVS_QRIS_TAB__ !== 'qris') ours.classList.remove('active');
+                if (!isShown(strip) || strip.classList.contains('hide')) {
+                    strip.classList.remove('hide');
+                    if (strip.style.display === 'none') strip.style.display = '';
+                    strip.setAttribute('data-bvs-unhid-strip', '1');
+                }
+            } else {
+                ours.classList.add('bvs-qris-tab-off');
+                ours.classList.remove('active');
+                ours.style.display = 'none';
+                if (window.__BVS_QRIS_TAB__ === 'qris') {
+                    window.__BVS_QRIS_TAB__ = 'manual';
+                    strip.querySelectorAll('.depomanual').forEach((t) => t.classList.add('active'));
+                }
+                if (strip.getAttribute('data-bvs-unhid-strip') === '1') {
+                    const nativeCepatOn = Array.from(
+                        strip.querySelectorAll('.depocepat, .depovip, .depohumpay')
+                    ).some((el) => (
+                        !el.classList.contains('bvs-qris-cepat-tab')
+                        && !el.classList.contains('hide')
+                        && el.style.display !== 'none'
+                    ));
+                    if (!nativeCepatOn) strip.classList.add('hide');
+                }
             }
         });
     }
