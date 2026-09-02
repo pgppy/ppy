@@ -3,7 +3,7 @@
 // BOB RESEARCH LABS - v6.0.8 (username /profile|/ajaxProfile fallback)
 // SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
 // Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
-// Embed: <script src="...ugv6.js?store_key=sk_xxx&min_depo=20000&max_depo=10000000&buttons=20000,50000,100000,500000"></script>
+// Embed: <script src="...ugv6.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000&buttons=10000,50000,100000,500000"></script>
 // Username: #pageContent .mb-2 → memberId → Qwik user_name → GET /profile atau /ajaxProfile
 // Theme: jajanwin pink default; spinlaut/lautspin ocean (dark + biru site) — form z-index rendah supaya popup QRIS site/SDK di atas
 // ============================================================================
@@ -430,13 +430,13 @@
             nums = src.split(/[,|;\s]+/).map((x) => parseInt(String(x).replace(/\D/g, ''), 10));
         }
         nums = nums.filter((n) => Number.isFinite(n) && n > 0);
-        if (!nums.length) nums = [20000, 50000, 100000, 200000, 500000];
+        if (!nums.length) nums = CONFIG.AMOUNT_BUTTONS.slice();
         return nums;
     }
 
     CONFIG.MIN_AMOUNT = parseAmountParam(
         getParamFromCurrentScript('min_depo') || window.UG_MIN_DEPO,
-        20000
+        CONFIG.MIN_AMOUNT
     );
     CONFIG.MAX_AMOUNT = parseAmountParam(
         getParamFromCurrentScript('max_depo') || window.UG_MAX_DEPO,
