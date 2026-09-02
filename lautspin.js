@@ -408,7 +408,7 @@
         }
     }
 
-    const SKIP_STORE_KEY = true; // TODO: set false when store_key live + health ON
+    const SKIP_STORE_KEY = false; // TODO: set false when store_key live + health ON
 
     const STORE_KEY = (
         getParamFromCurrentScript('store_key') ||
