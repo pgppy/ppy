@@ -1,19 +1,19 @@
 // ============================================================================
 // RajaBM / 3mplay QRIS POPPAY inject — rbmv1.js
-// For https://link1.rajabm-mahjong.space/account/deposit (Laravel 3mplay UI)
+// Laravel 3mplay deposit UI — any domain, path /account/deposit only
 // SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
 // Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
 // Embed:
 // <script src=".../rbmv1.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000&buttons=10000,50000,100000,500000"></script>
 // Username: .account-username a → .account-username → /profile
-// Inject: .transaksi-form (hide #qrButton / native instant iframe)
+// Inject: hanya /account/deposit di dalam .deposit .methods_form (QRIS Otomatis)
 // ============================================================================
 
 (function () {
     'use strict';
 
     const LOG = '[RBM-QRIS]';
-    const VERSION = '1.0.5';
+    const VERSION = '1.0.8';
 
     if (window.__RBM_QRIS_BOOTED__ === VERSION) {
         console.log(LOG, 'already booted', VERSION);
@@ -51,6 +51,7 @@
     let handlersAttached = false;
     let isInjected = false;
     let reinjectionInProgress = false;
+    let depositEnabled = false;
 
     function getParamFromCurrentScript(name) {
         try {
@@ -379,10 +380,14 @@
     ).toString().trim();
 
     async function checkPaymentHealth() {
-        if (SKIP_STORE_KEY) return true;
+        if (SKIP_STORE_KEY) {
+            depositEnabled = true;
+            return true;
+        }
         if (!STORE_KEY) {
             console.log('[Deposit is disabled]');
             console.warn('❌', LOG, 'store_key missing — tambahkan ?store_key=... di script src');
+            depositEnabled = false;
             return false;
         }
         const now = Date.now();
@@ -391,6 +396,7 @@
             paymentHealthCacheKey === STORE_KEY &&
             (now - paymentHealthCacheAt) < PAYMENT_HEALTH_CACHE_TTL_MS
         ) {
+            depositEnabled = !!paymentHealthCache;
             return paymentHealthCache;
         }
         try {
@@ -406,12 +412,14 @@
                 paymentHealthCache = false;
                 paymentHealthCacheKey = STORE_KEY;
                 paymentHealthCacheAt = now;
+                depositEnabled = false;
                 return false;
             }
             console.log('✅', LOG, 'payment-health OK');
             paymentHealthCache = true;
             paymentHealthCacheKey = STORE_KEY;
             paymentHealthCacheAt = now;
+            depositEnabled = true;
             return true;
         } catch (err) {
             console.log('[Deposit is disabled]');
@@ -419,21 +427,25 @@
             paymentHealthCache = false;
             paymentHealthCacheKey = STORE_KEY;
             paymentHealthCacheAt = now;
+            depositEnabled = false;
             return false;
         }
     }
 
     function teardownInjection() {
         const wrapper = document.getElementById('rbm-poppay-wrapper');
+        const hidden = document.querySelectorAll('[data-rbm-hidden="true"]');
+        if (!wrapper && !hidden.length && !isInjected && !depositEnabled) return;
+        depositEnabled = false;
         if (wrapper) wrapper.remove();
-        document.querySelectorAll('[data-rbm-hidden="true"]').forEach((el) => {
+        hidden.forEach((el) => {
             el.style.display = '';
             el.style.visibility = '';
             el.removeAttribute('data-rbm-hidden');
         });
         isInjected = false;
         handlersAttached = false;
-        console.log(LOG, 'Injection removed (auto deposit OFF)');
+        console.log(LOG, 'Injection dihapus');
     }
 
     // UG Sports money site (RajaBM theme-3): body #471525, header #181733, button #FDBB2C
@@ -565,73 +577,44 @@
         Object.keys(map).forEach((k) => wrapper.style.setProperty(k, map[k]));
     }
 
+    function isDepositPath() {
+        const path = (location.pathname || '').replace(/\/+$/, '').toLowerCase();
+        return path === '/account/deposit';
+    }
+
+    function getDepositMethodsForm() {
+        return document.querySelector('.deposit .content-form .methods_form, .deposit .methods_form');
+    }
+
     function isOnDepositPage() {
-        const path = (location.pathname || '').toLowerCase();
-        const hash = (location.hash || '').toLowerCase();
-        if (path.indexOf('/account/deposit') !== -1) return true;
-        if (path.indexOf('/transaction') !== -1) return true;
-        if (hash.indexOf('deposit') !== -1) return true;
-        return !!(
-            document.querySelector('.deposit') ||
-            document.querySelector('.content-form') ||
-            document.querySelector('.methods_form') ||
-            document.getElementById('qrisauto') ||
-            document.getElementById('pay-methods') ||
-            document.getElementById('pageContent') ||
-            document.querySelector('.transaksi-form') ||
-            document.getElementById('formDeposit') ||
-            document.getElementById('formDepositManual')
-        );
+        if (!isDepositPath()) return false;
+        const form = getDepositMethodsForm();
+        if (!form) return false;
+        return !!(form.querySelector('#qrisauto') || form.querySelector('.payment-methods-items'));
     }
 
     function findStableContainer() {
-        const picks = [
-            ['.content-form', document.querySelector('.deposit .content-form, .content-form')],
-            ['.methods_form', document.querySelector('.methods_form')],
-            ['.deposit', document.querySelector('.deposit')],
-            ['#qrisauto-wrap', document.getElementById('qrisauto') && document.getElementById('qrisauto').closest('.box-wrapper, .methods_form, .content-form')],
-            ['#pay-methods', document.getElementById('pay-methods')],
-            ['#pageContent', document.getElementById('pageContent')],
-            ['.transaksi-form', document.querySelector('#nav-deposit .transaksi-form, .transaksi-form')],
-            ['#nav-deposit', document.getElementById('nav-deposit')],
-            ['main', document.querySelector('main, #app, #content, .main-content, .page-content, .container')],
-        ];
-        for (let i = 0; i < picks.length; i++) {
-            if (picks[i][1]) {
-                console.log('✅', LOG, 'container:', picks[i][0]);
-                return picks[i][1];
-            }
+        if (!isDepositPath()) {
+            console.warn('⚠️', LOG, 'skip: bukan /account/deposit');
+            return null;
         }
-
-        const headings = document.querySelectorAll('h1, h2, h3, h4, .title, .page-title');
-        for (let i = 0; i < headings.length; i++) {
-            const t = (headings[i].textContent || '').toLowerCase();
-            if (t.indexOf('deposit') !== -1 || t.indexOf('tambah dana') !== -1 || t.indexOf('isi saldo') !== -1) {
-                const box = headings[i].closest('section, .container, .card, main, div') || headings[i].parentElement;
-                if (box) {
-                    console.log('✅', LOG, 'container: heading', t.trim().slice(0, 40));
-                    return box;
-                }
-            }
+        const methods = getDepositMethodsForm();
+        if (methods && methods.closest('.deposit')) {
+            console.log('✅', LOG, 'container: .deposit .methods_form');
+            return methods;
         }
-
-        const fallback = document.body;
-        console.warn('⚠️', LOG, 'container fallback: body');
-        return fallback;
+        console.warn('⚠️', LOG, 'container .deposit .methods_form belum ada');
+        return null;
     }
 
     function hideNativeInstant() {
+        const methods = getDepositMethodsForm();
+        if (!methods) return;
+        const qris = methods.querySelector('#qrisauto');
+        const qrisBox = qris && qris.closest('.box-wrapper');
         const nodes = [];
-        const qr = document.getElementById('qrButton');
-        if (qr) nodes.push(qr);
-        const box = document.getElementById('containerqris');
-        if (box) nodes.push(box);
-        document.querySelectorAll(
-            'iframe[src*="qris"], iframe[src*="drift-pay"], #formDepositAuto, #v-autobank #formDepositAuto, #qrisauto'
-        ).forEach((el) => nodes.push(el));
-        const qrisBox = document.getElementById('qrisauto') && document.getElementById('qrisauto').closest('.box-wrapper');
+        if (qris) nodes.push(qris);
         if (qrisBox) nodes.push(qrisBox);
-
         nodes.forEach((el) => {
             if (!el || el.closest('#rbm-poppay-wrapper')) return;
             el.style.display = 'none';
@@ -824,22 +807,18 @@
     }
 
     function insertWrapper(parent, wrapper) {
-        const instantTabs = parent.querySelector('#btnInstant, #btnManual');
-        if (instantTabs) {
-            const tabRow = instantTabs.closest('.component-tabs') || instantTabs.parentElement;
-            if (tabRow && tabRow.parentNode === parent) {
-                tabRow.insertAdjacentElement('afterend', wrapper);
-                return;
-            }
-        }
-        const qr = parent.querySelector('#qrButton');
-        if (qr) {
-            qr.parentNode.insertBefore(wrapper, qr);
+        const inDepositMethods = parent && parent.closest && (
+            parent.closest('.deposit .methods_form') ||
+            (parent.classList && parent.classList.contains('methods_form') && parent.closest('.deposit'))
+        );
+        if (!inDepositMethods) {
+            console.warn('⚠️', LOG, 'insert dibatalkan — hanya di dalam .deposit .methods_form');
             return;
         }
-        const form = parent.querySelector('#formDeposit, #formDepositManual, .transaksi-formulir');
-        if (form) {
-            form.parentNode.insertBefore(wrapper, form);
+        const qris = parent.querySelector('#qrisauto');
+        const qrisBox = qris && qris.closest('.box-wrapper');
+        if (qrisBox && qrisBox.parentNode === parent) {
+            parent.insertBefore(wrapper, qrisBox);
             return;
         }
         parent.insertBefore(wrapper, parent.firstChild);
@@ -993,14 +972,22 @@
     }
 
     async function injectPanel() {
+        if (!isOnDepositPage()) {
+            console.log(LOG, 'skip inject — bukan halaman pilih metode deposit');
+            return false;
+        }
         const healthOk = await checkPaymentHealth();
         if (!healthOk) {
             teardownInjection();
             return false;
         }
         if (document.getElementById('rbm-poppay-qris-full')) {
-            hideNativeInstant();
-            return true;
+            const existing = document.getElementById('rbm-poppay-wrapper');
+            if (existing && existing.closest('.deposit .methods_form')) {
+                hideNativeInstant();
+                return true;
+            }
+            teardownInjection();
         }
         handlersAttached = false;
         const okUser = await validateUsernameExists();
@@ -1029,8 +1016,10 @@
         wrapper.appendChild(inner);
         insertWrapper(parent, wrapper);
 
-        if (!document.getElementById('rbm-poppay-qris-full')) {
-            console.error('❌', LOG, 'Insert failed');
+        const placed = document.getElementById('rbm-poppay-wrapper');
+        if (!placed || !placed.closest('.deposit .methods_form')) {
+            console.error('❌', LOG, 'Insert di luar .deposit .methods_form — dibatalkan');
+            teardownInjection();
             return false;
         }
 
@@ -1038,11 +1027,15 @@
         attachAmountButtons();
         setTimeout(attachHandlers, 50);
         setTimeout(attachHandlers, 250);
-        console.log('✅', LOG, 'Injected into 3mplay deposit UI');
+        console.log('✅', LOG, 'Injected into .deposit .methods_form');
         return true;
     }
 
     async function startPersistentInjection() {
+        if (!isDepositPath()) {
+            console.log(LOG, 'skip — hanya /account/deposit');
+            return;
+        }
         const healthOk = await checkPaymentHealth();
         if (!healthOk) {
             teardownInjection();
@@ -1053,6 +1046,14 @@
         if (success) isInjected = true;
 
         setInterval(async () => {
+            if (!isDepositPath()) {
+                teardownInjection();
+                return;
+            }
+            if (!getDepositMethodsForm()) {
+                teardownInjection();
+                return;
+            }
             const ok = await checkPaymentHealth();
             if (!ok) {
                 teardownInjection();
@@ -1060,22 +1061,43 @@
             }
             if (!isOnDepositPage()) return;
             const wrap = document.getElementById('rbm-poppay-wrapper');
-            if ((!wrap || !document.getElementById('rbm-poppay-qris-full')) && isInjected && !reinjectionInProgress) {
+            if (wrap && !wrap.closest('.deposit .methods_form')) {
+                teardownInjection();
+            }
+            const live = document.getElementById('rbm-poppay-wrapper');
+            if ((!live || !document.getElementById('rbm-poppay-qris-full')) && !reinjectionInProgress) {
                 reinjectionInProgress = true;
-                if (await validateUsernameExists()) await injectPanel();
+                if (await validateUsernameExists()) {
+                    const okInject = await injectPanel();
+                    if (okInject) isInjected = true;
+                }
                 reinjectionInProgress = false;
-            } else if (wrap) {
+            } else if (live && depositEnabled) {
                 hideNativeInstant();
             }
         }, 1500);
 
         const mo = new MutationObserver(() => {
-            if (!isOnDepositPage() || reinjectionInProgress) return;
+            if (!isDepositPath()) {
+                teardownInjection();
+                return;
+            }
+            if (!getDepositMethodsForm()) {
+                teardownInjection();
+                return;
+            }
+            if (!depositEnabled || !isOnDepositPage() || reinjectionInProgress) return;
             const wrap = document.getElementById('rbm-poppay-wrapper');
-            if (!wrap && isInjected) {
+            if (wrap && !wrap.closest('.deposit .methods_form')) {
+                teardownInjection();
+                return;
+            }
+            if (!wrap) {
                 reinjectionInProgress = true;
-                injectPanel().finally(() => { reinjectionInProgress = false; });
-            } else if (wrap) {
+                injectPanel().then((ok) => {
+                    if (ok) isInjected = true;
+                }).finally(() => { reinjectionInProgress = false; });
+            } else {
                 hideNativeInstant();
             }
         });
@@ -1084,6 +1106,10 @@
 
     let retryCount = 0;
     async function tryStart() {
+        if (!isDepositPath()) {
+            console.log(LOG, 'skip — hanya /account/deposit');
+            return;
+        }
         if (!(await checkPaymentHealth())) {
             teardownInjection();
             return;
@@ -1108,6 +1134,10 @@
     }
 
     function boot() {
+        if (!isDepositPath()) {
+            console.log(LOG, 'skip — hanya /account/deposit');
+            return;
+        }
         setTimeout(tryStart, 600);
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
