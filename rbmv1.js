@@ -5,7 +5,7 @@
 // Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
 // Embed:
 // <script src=".../rbmv1.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000&buttons=10000,50000,100000,500000"></script>
-// Username: .account-username a → .account-username → /profile
+// Username: GET /ajaxProfile "Nama pengguna" → a.user-account span → header[data-username]
 // Inject: hanya /account/deposit di dalam .deposit .methods_form (QRIS Otomatis)
 // ============================================================================
 
@@ -13,7 +13,7 @@
     'use strict';
 
     const LOG = '[RBM-QRIS]';
-    const VERSION = '1.0.8';
+    const VERSION = '1.3.1';
 
     if (window.__RBM_QRIS_BOOTED__ === VERSION) {
         console.log(LOG, 'already booted', VERSION);
@@ -122,12 +122,26 @@
         ).join('\n');
     }
 
-    function isValidUser(text) {
+    function isInjectFormNode(el) {
+        if (!el || !el.closest) return false;
+        return !!(
+            el.closest('#formDepositAutoQris') ||
+            el.closest('#qrisFormContainer') ||
+            el.id === 'depositUsernameAutoQris'
+        );
+    }
+
+    function isLoginUsername(text) {
         if (!text) return false;
-        const t = String(text).replace(/\s+/g, ' ').trim();
+        const t = String(text).replace(/\s+/g, '').trim();
         if (t.length < 3 || t.length > 32) return false;
+        if (!/[a-zA-Z]/.test(t)) return false;
         if (!/^[a-zA-Z0-9._-]+$/.test(t)) return false;
         if (/^[._-]|[._-]$/.test(t)) return false;
+        return true;
+    }
+
+    function isUiLabel(text) {
         const blacklist = new Set([
             'wallet', 'profile', 'deposit', 'withdraw', 'withdrawal',
             'referral', 'promo', 'bonus', 'logout', 'login', 'register',
@@ -139,31 +153,94 @@
             'qris', 'instant', 'manual', 'undefined', 'null',
             'object', 'string', 'number', 'boolean', 'function',
             'true', 'false', 'nan', 'icomoon',
+            'idr', 'rp', 'usd', 'sgd', 'myr', 'id',
+            'home', 'game', 'slot', 'live', 'chat', 'notice', 'info',
+            'rank', 'level', 'lvl', 'balance', 'credit', 'poin', 'point',
+            'welcome', 'halo', 'hai', 'hey', 'hi',
+            'silvermember', 'goldmember',
         ]);
-        return !blacklist.has(t.toLowerCase());
+        return blacklist.has(String(text || '').toLowerCase());
     }
 
-    function cleanWelcome(text) {
+    function isValidUser(text) {
+        return isLoginUsername(text) && !isUiLabel(text);
+    }
+
+    function stripGreeting(text) {
+        // Hanya sapaan + spasi/koma. Jangan potong prefix username (hitacicair, hailey, welcome88).
+        let t = String(text || '').replace(/\s+/g, ' ').trim();
+        const greetings = [
+            /^selamat\s+datang[:,]?\s+/i,
+            /^welcome[:,]\s+/i,
+            /^welcome\s+/i,
+            /^halo[:,]\s+/i,
+            /^halo\s+/i,
+            /^hai[:,]\s+/i,
+            /^hai\s+/i,
+            /^hey[:,]\s+/i,
+            /^hey\s+/i,
+            /^hi[:,]\s+/i,
+            /^hi\s+/i,
+        ];
+        for (let i = 0; i < greetings.length; i++) t = t.replace(greetings[i], '');
+        return t.trim();
+    }
+
+    function stripNoise(text) {
         return String(text || '')
             .replace(/\s+/g, ' ')
             .trim()
-            .replace(/^selamat\s+datang[:,]?\s*/i, '')
-            .replace(/^welcome[:,]?\s*/i, '')
-            .replace(/^hi[:,]?\s*/i, '')
+            // "hitacicair 11:29" atau "hitacicair11:29"
+            .replace(/\s*\d{1,2}[:.]\d{2}(:\d{2})?\s*$/, '')
+            .replace(/(?:^|\s)(?:rp|idr)\s*[\d.,]+(?:\s|$)/ig, ' ')
+            .replace(/\s+/g, ' ')
             .trim();
+    }
+
+    function cleanWelcome(text) {
+        return stripGreeting(stripNoise(text));
+    }
+
+    function undoTranslateUsername(raw) {
+        let t = String(raw || '').trim();
+        if (!t) return t;
+        const pairs = [
+            [/^this(?=\d|[a-z_])/i, 'ini'],
+            [/^and(?=\d|[a-z_])/i, 'dan'],
+            [/^from(?=\d|[a-z_])/i, 'dari'],
+            [/^or(?=\d|[a-z_])/i, 'atau'],
+            [/^with(?=\d|[a-z_])/i, 'dengan'],
+            [/^for(?=\d|[a-z_])/i, 'untuk'],
+        ];
+        for (let i = 0; i < pairs.length; i++) {
+            if (pairs[i][0].test(t)) return t.replace(pairs[i][0], pairs[i][1]);
+        }
+        return t;
+    }
+
+    function isMoneyOrTimeToken(t) {
+        const s = String(t || '').trim();
+        if (!s) return true;
+        if (/^\d{1,2}[:.]\d{2}(:\d{2})?$/.test(s)) return true;
+        if (/^(rp|idr)$/i.test(s)) return true;
+        if (/^[\d.,]+$/.test(s)) return true;
+        return false;
     }
 
     function pickUserFromText(raw) {
         if (raw == null || typeof raw === 'object') return null;
-        const cleaned = cleanWelcome(raw);
+        const cleaned = undoTranslateUsername(cleanWelcome(raw));
         if (/\[object\s/i.test(cleaned)) return null;
         if (isValidUser(cleaned)) return cleaned;
         const parts = cleaned.split(/[\s|/]+/).filter(Boolean);
-        for (let i = parts.length - 1; i >= 0; i--) {
+        for (let i = 0; i < parts.length; i++) {
+            if (isMoneyOrTimeToken(parts[i])) continue;
             if (isValidUser(parts[i])) return parts[i];
         }
-        const m = cleaned.match(/[a-zA-Z][a-zA-Z0-9._-]{2,31}/);
-        if (m && isValidUser(m[0])) return m[0];
+        const m = cleaned.match(/[a-zA-Z][a-zA-Z0-9._-]{2,31}/g) || [];
+        for (let i = 0; i < m.length; i++) {
+            if (isValidUser(m[i])) return m[i];
+        }
         return null;
     }
 
@@ -193,22 +270,82 @@
         return null;
     }
 
+    function usernameFromDataAttrs(root) {
+        const doc = root || document;
+        if (!doc.querySelectorAll) return { user: null, node: null, source: null };
+
+        const ordered = [];
+        const header = doc.querySelector(
+            'header.header[data-username], header[data-username], .header[data-username]'
+        );
+        if (header) ordered.push(header);
+
+        const rest = doc.querySelectorAll('[data-username], [data-member-username]');
+        for (let i = 0; i < rest.length; i++) {
+            if (ordered.indexOf(rest[i]) === -1) ordered.push(rest[i]);
+        }
+
+        for (let i = 0; i < ordered.length; i++) {
+            const el = ordered[i];
+            if (!el || isInjectFormNode(el) || !el.getAttribute) continue;
+            const raw = (
+                el.getAttribute('data-username') ||
+                el.getAttribute('data-member-username') ||
+                ''
+            ).trim();
+            if (isLoginUsername(raw)) {
+                return { user: raw, node: el, source: 'header[data-username]' };
+            }
+        }
+        return { user: null, node: null, source: null };
+    }
+
+    function nodeOwnText(el) {
+        if (!el) return '';
+        const tag = (el.tagName || '').toUpperCase();
+        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
+            return String(el.value || '').trim();
+        }
+        let own = '';
+        const kids = el.childNodes;
+        for (let i = 0; i < kids.length; i++) {
+            if (kids[i].nodeType === 3) own += kids[i].textContent;
+        }
+        own = own.replace(/\s+/g, ' ').trim();
+        if (own) return own;
+        return String(el.textContent || '').replace(/\s+/g, ' ').trim();
+    }
+
     function usernameFromAccountNode(root) {
         const doc = root || document;
-        const attrNodes = doc.querySelectorAll(
-            'header[data-username], [data-username], [data-user], [data-member-username], [data-member]'
-        );
-        for (let i = 0; i < attrNodes.length; i++) {
-            const el = attrNodes[i];
-            const attrs = [
-                el.getAttribute('data-username'),
-                el.getAttribute('data-user'),
-                el.getAttribute('data-member-username'),
-                el.getAttribute('data-member'),
-            ];
-            for (let a = 0; a < attrs.length; a++) {
-                const u = pickUserFromText(attrs[a]);
-                if (u) return { user: u, node: el, source: 'data-username' };
+
+        function tryNode(el, source) {
+            if (!el || isInjectFormNode(el)) return null;
+            const u = pickUserFromText(nodeOwnText(el));
+            if (u) return { user: u, node: el, source: source };
+            return null;
+        }
+
+        const preferred = [
+            'a.user-account .text-center span',
+            'a.enlarge.user-account span',
+            'a.user-account span',
+            '.user-account span.username',
+            '.header-user span.username',
+            'span.username',
+            '.account-username a',
+            '.account-username',
+            '.sidenav__header-user a',
+            '.member-username',
+            '#memberUsername',
+            '.user-name',
+            '.profile-item h5',
+        ];
+        for (let s = 0; s < preferred.length; s++) {
+            const nodes = doc.querySelectorAll(preferred[s]);
+            for (let i = 0; i < nodes.length; i++) {
+                const found = tryNode(nodes[i], preferred[s]);
+                if (found) return found;
             }
         }
 
@@ -218,42 +355,18 @@
             for (let i = 0; i < mb2.length; i++) {
                 const el = mb2[i];
                 if (!el || /\bsubtitle\b/i.test(el.className || '')) continue;
-                const u = pickUserFromText(el.textContent);
+                if (isInjectFormNode(el)) continue;
+                const u = pickUserFromText(nodeOwnText(el));
                 if (u) return { user: u, node: el, source: '#pageContent .mb-2' };
             }
-        }
-
-        const selectors = [
-            '.user-account span',
-            'a.user-account span',
-            '.account-username a',
-            '.account-username',
-            '.sidenav__header-user a',
-            '.sidenav__header-user',
-            '.header-title h5',
-            '.header-user a',
-            '.header-user',
-            '.profile-item h5',
-            '.user-name',
-            '.member-username',
-            '#memberUsername',
-            '[name="username"]',
-        ];
-        for (let s = 0; s < selectors.length; s++) {
-            const el = doc.querySelector(selectors[s]);
-            if (!el) continue;
-            const value = el.tagName === 'INPUT' || el.tagName === 'SELECT'
-                ? el.value
-                : (el.textContent || '');
-            const u = pickUserFromText(value);
-            if (u) return { user: u, node: el, source: selectors[s] };
         }
         return { user: null, node: null, source: null };
     }
 
-    function lockUsername(user, source, node) {
-        const u = String(user || '').trim();
-        if (!isValidUser(u)) return null;
+    function lockUsername(user, source, node, trusted) {
+        let u = String(user || '').trim();
+        if (!trusted) u = undoTranslateUsername(u);
+        if (trusted ? !isLoginUsername(u) : !isValidUser(u)) return null;
         _lockedUsername = u;
         window.__RBM_LOCKED_USERNAME__ = u;
         console.log('✅', LOG, 'Username locked (' + source + '):', u);
@@ -275,31 +388,95 @@
         el.readOnly = true;
     }
 
+    function isQwikSite() {
+        try {
+            if (typeof window.isQwik !== 'undefined' && window.isQwik) return true;
+        } catch (_) {}
+        return false;
+    }
+
+    function readUsernameFromProfileDom(doc) {
+        if (!doc) return null;
+
+        function textOf(el) {
+            return String(el && (el.textContent || '')).replace(/\s+/g, ' ').trim();
+        }
+
+        const labels = doc.querySelectorAll('p._label, .profile-edit p._label, .profile-edit p');
+        for (let i = 0; i < labels.length; i++) {
+            const lab = labels[i];
+            const labelText = textOf(lab);
+            if (!/nama\s*pengguna\s*:?/i.test(labelText) && !/^username\s*:?\s*$/i.test(labelText)) continue;
+            let valueEl = null;
+            const row = lab.closest && lab.closest('.row');
+            if (row) {
+                valueEl = row.querySelector('.col-xs-8 p, .col-xs-8 span, .col-sm-8 p, .col-md-8 p');
+            }
+            if (!valueEl && lab.parentElement && lab.parentElement.nextElementSibling) {
+                const next = lab.parentElement.nextElementSibling;
+                valueEl = next.querySelector('p, span') || next;
+            }
+            const u = textOf(valueEl);
+            if (isLoginUsername(u)) {
+                return { user: u, node: valueEl, source: 'ajaxProfile Nama pengguna' };
+            }
+        }
+
+        const wrap = doc.querySelector('.username-wrapper div');
+        if (wrap) {
+            const t = textOf(wrap);
+            if (isLoginUsername(t)) {
+                return { user: t, node: wrap, source: '.username-wrapper div' };
+            }
+        }
+
+        const nth = doc.querySelectorAll('.profile-edit p:nth-child(1)');
+        if (nth[1]) {
+            const t = textOf(nth[1]);
+            if (isLoginUsername(t)) {
+                return { user: t, node: nth[1], source: '.profile-edit p:nth-child(1)' };
+            }
+        }
+
+        const field = doc.querySelector('.profile-field-text + div');
+        if (field) {
+            const t = textOf(field);
+            if (isLoginUsername(t)) {
+                return { user: t, node: field, source: '.profile-field-text + div' };
+            }
+        }
+        return null;
+    }
+
     async function getUsernameFromProfilePage() {
-        const urls = ['/profile', '/account/profile', '/member/profile', '/account'];
-        for (let i = 0; i < urls.length; i++) {
-            try {
-                const res = await fetch(urls[i], {
-                    method: 'GET',
-                    credentials: 'same-origin',
-                    cache: 'no-store',
-                    headers: { Accept: 'text/html' },
-                });
-                if (!res.ok) continue;
-                const html = await res.text();
-                const doc = new DOMParser().parseFromString(html, 'text/html');
-                const found = usernameFromAccountNode(doc);
-                if (found.user) {
-                    console.log(LOG, 'Username from', urls[i], found.source, found.user);
-                    return found.user;
-                }
-                const item = doc.querySelector('.profile-item h5, .profile-item .value, .account-info h5');
-                const fromItem = item && pickUserFromText(item.textContent);
-                if (fromItem) {
-                    console.log(LOG, 'Username from', urls[i], '.profile-item', fromItem);
-                    return fromItem;
-                }
-            } catch (_) {}
+        const urls = isQwikSite()
+            ? ['/profile', '/ajaxProfile']
+            : ['/ajaxProfile', '/profile', '/account/profile', '/member/profile', '/account'];
+
+        let sawOk = false;
+        for (let attempt = 0; attempt < 6; attempt++) {
+            sawOk = false;
+            for (let i = 0; i < urls.length; i++) {
+                try {
+                    const res = await fetch(urls[i], {
+                        method: 'GET',
+                        credentials: 'same-origin',
+                        cache: 'no-store',
+                        headers: { Accept: 'text/html,application/xhtml+xml,*/*' },
+                    });
+                    if (!res.ok) continue;
+                    sawOk = true;
+                    const html = await res.text();
+                    const doc = new DOMParser().parseFromString(html, 'text/html');
+                    const fromFields = readUsernameFromProfileDom(doc);
+                    if (fromFields) {
+                        console.log(LOG, 'Username from', urls[i], fromFields.source, fromFields.user);
+                        return { user: fromFields.user, trusted: true, node: fromFields.node, url: urls[i], source: fromFields.source };
+                    }
+                } catch (_) {}
+            }
+            if (!sawOk) break;
+            await new Promise((resolve) => setTimeout(resolve, 300));
         }
         return null;
     }
@@ -307,15 +484,28 @@
     function logUsernameMiss() {
         const header = document.querySelector('header');
         console.warn('⚠️', LOG, 'Username NOT found. header dataset:', header && header.dataset);
-        console.warn(LOG, 'hint: paste di console → document.querySelector("header") && document.querySelector("header").outerHTML.slice(0,800)');
+        console.warn(LOG, 'hint: paste di console → document.querySelector("header") && document.querySelector("header").dataset');
     }
 
     async function getUsername() {
-        if (_lockedUsername && isValidUser(_lockedUsername)) return _lockedUsername;
-        if (window.__RBM_LOCKED_USERNAME__ && isValidUser(window.__RBM_LOCKED_USERNAME__)) {
+        if (_lockedUsername && isLoginUsername(_lockedUsername)) return _lockedUsername;
+        if (window.__RBM_LOCKED_USERNAME__ && isLoginUsername(window.__RBM_LOCKED_USERNAME__)) {
             _lockedUsername = window.__RBM_LOCKED_USERNAME__;
             return _lockedUsername;
         }
+
+        const fromProfile = await getUsernameFromProfilePage();
+        if (fromProfile && fromProfile.user) {
+            return lockUsername(
+                fromProfile.user,
+                (fromProfile.url || '/ajaxProfile') + ' ' + (fromProfile.source || ''),
+                fromProfile.node,
+                true
+            );
+        }
+
+        const fromAttr = usernameFromDataAttrs(document);
+        if (fromAttr.user) return lockUsername(fromAttr.user, fromAttr.source, fromAttr.node, true);
 
         const fromDom = usernameFromAccountNode(document);
         if (fromDom.user) return lockUsername(fromDom.user, fromDom.source, fromDom.node);
@@ -329,15 +519,12 @@
 
         const globalNames = [
             'memberId', 'username', 'user_name', 'memberName',
-            'memberUsername', 'userName', 'member_name', 'user',
+            'memberUsername', 'userName', 'member_name',
         ];
         for (let i = 0; i < globalNames.length; i++) {
             const g = usernameFromUnknown(window[globalNames[i]]);
             if (g) return lockUsername(g, 'window.' + globalNames[i]);
         }
-
-        const fromProfile = await getUsernameFromProfilePage();
-        if (fromProfile) return lockUsername(fromProfile, '/profile');
 
         logUsernameMiss();
         return null;
