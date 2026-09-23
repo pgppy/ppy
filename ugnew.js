@@ -1,10 +1,11 @@
 // ============================================================================
 // UG QRIS POPPAY INJECTION - Full Replica of injectscript.html
-// BOB RESEARCH LABS - v3.3.4 (pg-ppy-sdk + payment-health-v2)
+// BOB RESEARCH LABS - v3.3.5 (pg-ppy-sdk + payment-health-v2)
 // SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
 // Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
 // Embed: <script src="...ugv4.js?store_key=sk_xxx">
-// Username: shape-only (rbmv2) TANPA blacklist; trusted = qwik/json → fetch /profile
+// Username: readonly field #depositUsernameAutoQris (rbmv2-style)
+//           shape-only TANPA blacklist; trusted = qwik/json → fetch /profile
 //           Live DOM di-skip jika Chrome Translate / site Qwik
 //           (hindari ini8787 → this8787)
 // ============================================================================
@@ -12,7 +13,7 @@
 (function () {
     'use strict';
 
-    console.log('🚀 [UG-QRIS-POPPAY] Starting v3.3.4 (pg-ppy-sdk)...');
+    console.log('🚀 [UG-QRIS-POPPAY] Starting v3.3.5 (pg-ppy-sdk)...');
 
     // ========================================================================
     // Global Amount Setter (Direct onclick - accessible from HTML)
@@ -366,6 +367,12 @@
         el.classList.add('notranslate');
         el.setAttribute('translate', 'no');
         el.readOnly = true;
+    }
+
+    async function fillUsernameField() {
+        const user = await getUsername();
+        syncUsernameField(user);
+        return user;
     }
 
     function isQwikSite() {
@@ -1376,6 +1383,21 @@
                     border-radius: 6px;
                     width: 100%;
                 }
+
+                #depositUsernameAutoQris,
+                .qris-username-readonly {
+                    border-radius: 6px;
+                    width: 100%;
+                    cursor: default;
+                    opacity: 0.95;
+                    color: #e8e8e8;
+                    background: #222;
+                }
+
+                #depositUsernameAutoQris:focus {
+                    border-color: #555;
+                    outline: none;
+                }
                 
                 .qris-input::placeholder {
                     color: #666;
@@ -1476,6 +1498,14 @@
                 <div class="qris-form" id="qrisFormContainer">
                     <form id="formDepositAutoQris">
                         <input type="hidden" id="bankSelectAutoQris" value="QRIS">
+
+                        <div class="form-group mb-3">
+                            <label for="depositUsernameAutoQris">Username</label>
+                            <input class="qris-input qris-username-readonly notranslate" type="text"
+                                id="depositUsernameAutoQris" name="username" value="" readonly tabindex="-1"
+                                translate="no" autocomplete="off" placeholder="Mendeteksi username...">
+                            <small class="qris-input-hint">Username akun login (otomatis)</small>
+                        </div>
                         
                         <div class="form-group mb-3">
                             <label>Jumlah Deposit</label>
@@ -1740,6 +1770,11 @@
 
         console.log('[UG-QRIS] ✓ Form elements found, attaching handlers...');
 
+        // Username readonly (otomatis) — sama seperti rbmv2
+        fillUsernameField().catch((err) => {
+            console.warn(LOG, 'fillUsernameField failed', err && err.message);
+        });
+
         // Load promotions
         populatePromotionSelect().catch(err => {
             console.error('❌ [UG-QRIS] Failed to load promotions:', err);
@@ -1883,6 +1918,7 @@
 
                 // Get username (with validation)
                 const username = await getUsername();
+                syncUsernameField(username);
 
                 if (!username) {
                     throw new Error('Username tidak ditemukan. Silakan login terlebih dahulu.');
