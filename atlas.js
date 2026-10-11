@@ -897,14 +897,14 @@
                 formContainer.style.display = 'none';
                 resultContainer.classList.add('active');
                 await new Promise((r) => setTimeout(r, 80));
-                const invoice = 'BESTIE-' + Date.now();
+                const invoice = 'ATLAS-' + Date.now();
                 const payment = new window.QrisSDK({
                     healthCheckEnabled: false,
                     storeKey: STORE_KEY,
                     store_key: STORE_KEY,
                     amount: amount,
                     invoice: invoice,
-                    notes: 'BESTIE Auto Deposit - ' + invoice,
+                    notes: 'ATLAS Auto Deposit - ' + invoice,
                     username: username,
                     payor_name: username,
                     payor_email: '',
