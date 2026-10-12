@@ -1,6 +1,6 @@
 // ============================================================================
-// RajaBM / 3mplay QRIS POPPAY inject — ketupat.js (ketupat-123.fit / bidadari22.co.uk)
-// Hanya ketupat-123.fit dan bidadari22.co.uk, path /account/deposit
+// RajaBM / 3mplay QRIS POPPAY inject — ketupat.js (ketupat-123.fit)
+// Laravel 3mplay deposit UI — any domain, path /account/deposit only
 // SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
 // Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
 // Embed:
@@ -14,8 +14,7 @@
     'use strict';
 
     const LOG = '[KETUPAT-QRIS]';
-    const VERSION = '1.0.1';
-    const ALLOWED_HOSTS = ['ketupat-123.fit', 'bidadari22.co.uk'];
+    const VERSION = '1.0.0';
 
     if (window.__KETUPAT_QRIS_BOOTED__ === VERSION) {
         console.log(LOG, 'already booted', VERSION);
@@ -70,7 +69,7 @@
             const current = document.currentScript;
             const scripts = Array.from(document.querySelectorAll('script[src]')).map((s) => s.src).reverse();
             const named = current?.src || scripts.find((url) =>
-                /ketupat\.js(\?|$)/i.test(url)
+                /ketupat\.js(\?|$)|atlas98?\.js(\?|$)|bestie\.js(\?|$)|BESTIEv[0-9]+\.js(\?|$)|rajabm(?:_qris)?\.js(\?|$)|rbmv[0-9]+\.js(\?|$)/i.test(url)
             );
             const src = named || scripts.find((url) => {
                 try {
@@ -99,7 +98,7 @@
     }
 
     function parseButtonList(raw) {
-        const src = raw || window.KETUPAT_AMOUNT_BUTTONS || '';
+        const src = raw || window.KETUPAT_AMOUNT_BUTTONS || window.BESTIE_AMOUNT_BUTTONS || '';
         let nums = [];
         if (Array.isArray(src)) nums = src.map((x) => parseInt(x, 10));
         else if (typeof src === 'string' && src.trim()) {
@@ -111,11 +110,11 @@
     }
 
     CONFIG.MIN_AMOUNT = parseAmountParam(
-        getParamFromCurrentScript('min_depo') || window.KETUPAT_MIN_DEPO,
+        getParamFromCurrentScript('min_depo') || window.KETUPAT_MIN_DEPO || window.BESTIE_MIN_DEPO,
         CONFIG.MIN_AMOUNT
     );
     CONFIG.MAX_AMOUNT = parseAmountParam(
-        getParamFromCurrentScript('max_depo') || window.KETUPAT_MAX_DEPO,
+        getParamFromCurrentScript('max_depo') || window.KETUPAT_MAX_DEPO || window.BESTIE_MAX_DEPO,
         10000000
     );
     if (CONFIG.MAX_AMOUNT < CONFIG.MIN_AMOUNT) CONFIG.MAX_AMOUNT = CONFIG.MIN_AMOUNT;
@@ -437,14 +436,14 @@
 
     function teardownInjection() {
         const wrapper = document.getElementById('KETUPAT-poppay-wrapper');
-        const hidden = document.querySelectorAll('[data-KETUPAT-hidden="true"]');
+        const hidden = document.querySelectorAll('[data-BESTIE-hidden="true"]');
         if (!wrapper && !hidden.length && !isInjected && !depositEnabled) return;
         depositEnabled = false;
         if (wrapper) wrapper.remove();
         hidden.forEach((el) => {
             el.style.display = '';
             el.style.visibility = '';
-            el.removeAttribute('data-KETUPAT-hidden');
+            el.removeAttribute('data-BESTIE-hidden');
         });
         isInjected = false;
         handlersAttached = false;
@@ -534,7 +533,31 @@
     }
 
     function getInjectTheme() {
-        return THEME_MONEY;
+        const t = Object.assign({}, THEME_MONEY);
+        const bodyBg = sampleComputed('body', 'backgroundColor')
+            || sampleComputed('.deposit', 'backgroundColor')
+            || [71, 21, 37];
+        const headerBg = sampleComputed('.header-wrapper', 'backgroundColor')
+            || sampleComputed('.main-header', 'backgroundColor')
+            || [24, 23, 51];
+        const textRgb = sampleComputed('body', 'color')
+            || sampleComputed('.user-account', 'color')
+            || [255, 255, 255];
+        const accentRgb = sampleAccentColor();
+
+        t.bg = rgbToHex(bodyBg);
+        t.bgDeep = rgbToHex(luminance(headerBg) < luminance(bodyBg) ? headerBg : darken(bodyBg, 0.62));
+        t.text = rgbToHex(textRgb);
+        t.muted = rgbToRgba(textRgb, 0.72);
+        t.accent = rgbToHex(accentRgb);
+        t.accentHover = rgbToHex(lighten(accentRgb, 0.22));
+        t.accentText = luminance(accentRgb) > 0.55 ? rgbToHex(headerBg) : '#FFFFFF';
+        t.border = rgbToRgba(accentRgb, 0.38);
+        t.btnBg = rgbToRgba(accentRgb, 0.12);
+        t.badgeBg = rgbToRgba(accentRgb, 0.20);
+        t.successBg = rgbToRgba(accentRgb, 0.16);
+        console.log(LOG, 'Theme from money site', t);
+        return t;
     }
 
     function applyInjectTheme(wrapper, theme) {
@@ -556,35 +579,13 @@
         Object.keys(map).forEach((k) => wrapper.style.setProperty(k, map[k]));
     }
 
-    function isAllowedHost() {
-        const host = (location.hostname || '').replace(/^www\./i, '').toLowerCase();
-        return ALLOWED_HOSTS.indexOf(host) !== -1;
-    }
-
     function isDepositPath() {
-        if (!isAllowedHost()) return false;
         const path = (location.pathname || '').replace(/\/+$/, '').toLowerCase();
         return path === '/account/deposit';
     }
 
     function getDepositMethodsForm() {
         return document.querySelector('.deposit .content-form .methods_form, .deposit .methods_form');
-    }
-
-    function findNativeQrisBox(methods) {
-        const root = methods || getDepositMethodsForm();
-        if (!root) return null;
-        const qris = root.querySelector('#qrisauto');
-        if (qris) {
-            const box = qris.closest('.box-wrapper');
-            if (box) return box;
-        }
-        const boxes = root.querySelectorAll('.box-wrapper');
-        for (let i = 0; i < boxes.length; i++) {
-            const t = (boxes[i].innerText || '').replace(/\s+/g, ' ').toLowerCase();
-            if (/qris/.test(t) && /automat|otomat/.test(t)) return boxes[i];
-        }
-        return null;
     }
 
     function isOnDepositPage() {
@@ -609,11 +610,18 @@
     }
 
     function hideNativeInstant() {
-        // QRIS bawaan site dibiarkan tampil. Pulihkan kalau versi lama sempat di-hide.
-        document.querySelectorAll('[data-KETUPAT-hidden="true"]').forEach((el) => {
-            el.style.display = '';
-            el.style.visibility = '';
-            el.removeAttribute('data-KETUPAT-hidden');
+        const methods = getDepositMethodsForm();
+        if (!methods) return;
+        const qris = methods.querySelector('#qrisauto');
+        const qrisBox = qris && qris.closest('.box-wrapper');
+        const nodes = [];
+        if (qris) nodes.push(qris);
+        if (qrisBox) nodes.push(qrisBox);
+        nodes.forEach((el) => {
+            if (!el || el.closest('#KETUPAT-poppay-wrapper')) return;
+            el.style.display = 'none';
+            el.style.visibility = 'hidden';
+            el.setAttribute('data-BESTIE-hidden', 'true');
         });
     }
 
@@ -777,7 +785,7 @@
                         </div>
                         <div class="form-group mb-3">
                             <label>Jumlah Deposit</label>
-                            <div class="qris-amount-buttons" id="KETUPAT-amount-buttons">${amountButtonsHtml()}</div>
+                            <div class="qris-amount-buttons" id="BESTIE-amount-buttons">${amountButtonsHtml()}</div>
                             <div class="qris-input-group">
                                 <div class="qris-input-prefix">Rp</div>
                                 <input class="qris-input" type="text" id="depositShowAmountAutoQris" placeholder="Atau masukkan jumlah manual">
@@ -809,6 +817,12 @@
             console.warn('⚠️', LOG, 'insert dibatalkan — hanya di dalam .deposit .methods_form');
             return;
         }
+        const qris = parent.querySelector('#qrisauto');
+        const qrisBox = qris && qris.closest('.box-wrapper');
+        if (qrisBox && qrisBox.parentNode === parent) {
+            parent.insertBefore(wrapper, qrisBox);
+            return;
+        }
         parent.insertBefore(wrapper, parent.firstChild);
     }
 
@@ -823,8 +837,8 @@
     }
 
     function attachAmountButtons() {
-        if (window.__KETUPAT_AMOUNT_BOUND__) return;
-        window.__KETUPAT_AMOUNT_BOUND__ = true;
+        if (window.__BESTIE_AMOUNT_BOUND__) return;
+        window.__BESTIE_AMOUNT_BOUND__ = true;
         const onPick = function (e) {
             const button = e.target && e.target.closest && e.target.closest('#KETUPAT-poppay-wrapper .qris-amount-btn');
             if (!button) return;
@@ -890,7 +904,7 @@
                     store_key: STORE_KEY,
                     amount: amount,
                     invoice: invoice,
-                    notes: 'Samurai Auto Deposit - ' + invoice,
+                    notes: 'KETUPAT Auto Deposit - ' + invoice,
                     username: username,
                     payor_name: username,
                     payor_email: '',
@@ -957,6 +971,28 @@
                 if (wrap) wrap.style.display = 'none';
             });
         }
+        const methods = getDepositMethodsForm();
+        if (!methods || methods.getAttribute('data-ketupat-tab-bound') === '1') return;
+        methods.setAttribute('data-ketupat-tab-bound', '1');
+        methods.addEventListener('click', function () {
+            setTimeout(function () {
+                const form = getDepositMethodsForm();
+                if (!form || !isDepositPath()) return;
+                let wrap = document.getElementById('KETUPAT-poppay-wrapper');
+                if (wrap && !form.contains(wrap)) {
+                    form.insertBefore(wrap, form.firstChild);
+                }
+                if (wrap) {
+                    wrap.style.display = 'block';
+                    hideNativeInstant();
+                    return;
+                }
+                if (depositEnabled && !reinjectionInProgress) {
+                    reinjectionInProgress = true;
+                    injectPanel().finally(function () { reinjectionInProgress = false; });
+                }
+            }, 80);
+        }, true);
     }
 
     async function injectPanel() {
@@ -990,9 +1026,7 @@
 
         const wrapper = document.createElement('div');
         wrapper.id = 'KETUPAT-poppay-wrapper';
-        wrapper.className = 'notranslate';
-        wrapper.setAttribute('translate', 'no');
-        wrapper.setAttribute('data-KETUPAT-persistent', 'true');
+        wrapper.setAttribute('data-BESTIE-persistent', 'true');
         applyInjectTheme(wrapper);
 
         const inner = document.createElement('div');
@@ -1124,32 +1158,12 @@
     }
 
     function boot() {
-        if (!isAllowedHost()) {
-            console.log(LOG, 'skip — host bukan ketupat-123 / bidadari22');
-            return;
-        }
         if (!isDepositPath()) {
             console.log(LOG, 'skip — hanya /account/deposit');
             return;
         }
         setTimeout(tryStart, 600);
     }
-
-    function watchDepositPath() {
-        if (window.__KETUPAT_PATH_WATCH__) return;
-        window.__KETUPAT_PATH_WATCH__ = true;
-        let last = '';
-        const tick = function () {
-            const path = (location.pathname || '').replace(/\/+$/, '').toLowerCase();
-            if (path === last) return;
-            last = path;
-            if (isDepositPath()) boot();
-        };
-        setInterval(tick, 700);
-        window.addEventListener('popstate', tick);
-        tick();
-    }
-
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watchDepositPath);
-    else watchDepositPath();
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    else boot();
 })();
