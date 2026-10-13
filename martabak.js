@@ -1,0 +1,931 @@
+// ============================================================================
+// Martabak188 QRIS Instant inject — martabak.js
+// Tab native AUTO (type=3) + BANK (type=1) tidak diubah (onclick tetap).
+// Tab baru "QRIS INSTANT" (#qris-instant). Masuk menu Deposit → tab kita.
+// Klik AUTO → form native; klik BANK → type=1 native.
+// SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
+// Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
+// Embed:
+// <script src=".../martabak.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000"></script>
+// Username: header "Selamat datang," + .menu-top (bukan DOM acak)
+// Native form type=3 di-hide saat panel ON; health OFF → native kembali
+// ============================================================================
+
+(function () {
+    'use strict';
+
+    const LOG = '[MARTABAK-QRIS]';
+    const VERSION = '1.0.8';
+    const SDK_URL = 'https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
+    const PANEL_ID = 'mtb-qris-inject-wrap';
+    const TAB_ID = 'mtb-poppay-tab';
+    const TAB_HASH = '#qris-instant';
+    const NATIVE_AUTO_KEY = 'mtb-native-auto';
+    const LOCK_KEY = '__MARTABAK_QRIS_USER__';
+
+    if (window.__MARTABAK_QRIS_BOOTED__) {
+        if (typeof window.__MARTABAK_QRIS_BOOT__ === 'function') {
+            window.__MARTABAK_QRIS_BOOT__({ rehook: true });
+        }
+        return;
+    }
+    window.__MARTABAK_QRIS_BOOTED__ = true;
+
+    window.MARTABAK_PG_CONFIG = window.MARTABAK_PG_CONFIG || {};
+
+    let formSubmitInProgress = false;
+    let injectHandlersAttached = false;
+    let reinjectionInProgress = false;
+    let paymentHealthCache = null;
+    let paymentHealthCacheKey = '';
+    let paymentHealthCacheAt = 0;
+    let healthMonitorStarted = false;
+    let lastHealthLogged = null;
+    let pathGuardStarted = false;
+    const PAYMENT_HEALTH_TTL = 30000;
+
+    function parseBool(raw, fallback) {
+        if (raw == null || raw === '') return fallback;
+        const v = String(raw).trim().toLowerCase();
+        if (v === '1' || v === 'true' || v === 'yes') return true;
+        if (v === '0' || v === 'false' || v === 'no') return false;
+        return fallback;
+    }
+
+    function parseNum(raw, fallback) {
+        if (raw == null || raw === '') return fallback;
+        const n = parseInt(String(raw).replace(/[^\d]/g, ''), 10);
+        return Number.isFinite(n) && n > 0 ? n : fallback;
+    }
+
+    function getScriptSrc() {
+        try {
+            const current = document.currentScript;
+            if (current?.src) return current.src;
+            const scripts = Array.from(document.querySelectorAll('script[src]'))
+                .map((s) => s.src)
+                .reverse();
+            const named = scripts.find((url) =>
+                /martabak(?:188)?\.js(\?|$)/i.test(url) ||
+                /mtb[_-]?qris[_-]?inject\.js(\?|$)/i.test(url)
+            );
+            if (named) return named;
+            return scripts.find((url) => {
+                try {
+                    return !!new URL(url, location.href).searchParams.get('store_key');
+                } catch (_) {
+                    return false;
+                }
+            }) || '';
+        } catch (_) {
+            return '';
+        }
+    }
+
+    function getParam(name) {
+        try {
+            const src = getScriptSrc();
+            if (!src) return null;
+            return new URL(src, location.href).searchParams.get(name);
+        } catch (_) {
+            return null;
+        }
+    }
+
+    const DEBUG = parseBool(getParam('debug'), window.MARTABAK_PG_CONFIG.DEBUG === true);
+    const PREVIEW = parseBool(getParam('preview'), window.MARTABAK_PG_CONFIG.PREVIEW === true);
+
+    function debugLog(...args) {
+        if (DEBUG) console.log(LOG, ...args);
+    }
+
+    function logHealthState(ok) {
+        if (lastHealthLogged === ok) return;
+        lastHealthLogged = ok;
+        console.log(ok ? 'DEPOSIT HEALTH ON' : 'DEPOSIT HEALTH OFF');
+    }
+
+    function parseButtons(raw) {
+        if (!raw) return [20000, 50000, 100000, 200000, 500000];
+        const list = String(raw).split(/[,\s]+/).map((x) => parseInt(x, 10)).filter((n) => n > 0);
+        return list.length ? list : [20000, 50000, 100000, 200000, 500000];
+    }
+
+    const CFG = {
+        STORE_KEY: (
+            getParam('store_key') ||
+            window.MARTABAK_PGSCRIPT_STORE_KEY ||
+            window.MARTABAK_PG_CONFIG.STORE_KEY ||
+            ''
+        ).toString().trim(),
+        MIN_DEPO: parseNum(getParam('min_depo'), window.MARTABAK_PG_CONFIG.MIN_DEPO || 20000),
+        MAX_DEPO: parseNum(getParam('max_depo'), window.MARTABAK_PG_CONFIG.MAX_DEPO || 10000000),
+        INVOICE_PREFIX: getParam('invoice_prefix') || window.MARTABAK_PG_CONFIG.INVOICE_PREFIX || 'MTB-',
+        SKIP_STORE_KEY: window.MARTABAK_PG_CONFIG.SKIP_STORE_KEY === true,
+        BUTTONS: parseButtons(getParam('buttons') || window.MARTABAK_PG_CONFIG.BUTTONS),
+        HEALTH_BASE: (
+            getParam('health_base') ||
+            window.MARTABAK_PG_HEALTH_BASE ||
+            'https://payment.pg-poppay.com'
+        ).toString().trim().replace(/\/+$/, ''),
+        HEALTH_POLL_SEC: parseNum(getParam('health_poll_sec'), 15),
+    };
+
+    function depositPath() {
+        return (location.pathname || '').replace(/\/+$/, '').toLowerCase();
+    }
+
+    function isDepositMenu() {
+        return PREVIEW || depositPath() === '/user/deposit';
+    }
+
+    function depositType() {
+        return new URLSearchParams(location.search).get('type') || '';
+    }
+
+    function isOurTab() {
+        if (PREVIEW) return true;
+        if (!isDepositMenu()) return false;
+        return depositType() === '3' && location.hash === TAB_HASH;
+    }
+
+    function isDepositQrisPage() {
+        return isOurTab();
+    }
+
+    function isValidUser(v) {
+        const t = String(v || '').trim();
+        if (!t || t.length < 3 || t.length > 32) return false;
+        if (/\s/.test(t)) return false;
+        if (/^(username|user|member|akun|saya|welcome|deposit|qris)$/i.test(t)) return false;
+        return /^[a-zA-Z0-9._-]+$/.test(t);
+    }
+
+    function scrapeWelcomeUser() {
+        const labels = Array.from(document.querySelectorAll('div'));
+        for (const lab of labels) {
+            const txt = (lab.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!/^selamat datang,?$/i.test(txt)) continue;
+            const wrap = lab.parentElement;
+            if (!wrap) continue;
+            const top = wrap.querySelector('.menu-top');
+            const u = (top?.textContent || '').trim();
+            if (isValidUser(u)) return u;
+        }
+        return '';
+    }
+
+    function lockedUser() {
+        try {
+            const prev = window[LOCK_KEY];
+            if (prev && typeof prev === 'object' && isValidUser(prev.user)) return String(prev.user).trim();
+        } catch (_) {}
+        return '';
+    }
+
+    function lockUser(user, source) {
+        if (!isValidUser(user)) return '';
+        const u = String(user).trim();
+        window[LOCK_KEY] = { user: u, source: source || 'dom' };
+        return u;
+    }
+
+    function readUsernameFromDom() {
+        return lockedUser() || scrapeWelcomeUser();
+    }
+
+    async function fetchProfilUser() {
+        try {
+            const r = await fetch('/user/profil', { credentials: 'include', cache: 'no-store' });
+            const html = await r.text();
+            const m = html.match(/Selamat datang,[\s\S]{0,240}?class="menu-top"[^>]*>([^<]+)/i);
+            const u = m ? m[1].replace(/\s+/g, ' ').trim() : '';
+            return isValidUser(u) ? u : '';
+        } catch (_) {
+            return '';
+        }
+    }
+
+    async function resolveUsername() {
+        const fromDom = scrapeWelcomeUser();
+        if (fromDom) return lockUser(fromDom, 'welcome');
+        const locked = lockedUser();
+        if (locked) return locked;
+        const fromProfil = await fetchProfilUser();
+        if (fromProfil) return lockUser(fromProfil, 'profil');
+        return '';
+    }
+
+    function nativeForm() {
+        return document.querySelector(
+            'form.from-prevent-multiple-submits, form.form-prevent-multiple-submits, form[action*="deposit"]'
+        );
+    }
+
+    function nativeTabRow() {
+        const tabs = Array.from(document.querySelectorAll('div.tab-active, div.tab-nonactive'));
+        const auto = tabs.find((el) => /AUTO/i.test(el.textContent || '') && el.id !== TAB_ID);
+        if (!auto) return null;
+        return auto.parentElement;
+    }
+
+    function isNativeAutoEl(el) {
+        return !!(el && el.id !== TAB_ID && /AUTO/i.test(el.textContent || ''));
+    }
+
+    function isNativeBankEl(el) {
+        return !!(el && el.id !== TAB_ID && /BANK/i.test(el.textContent || ''));
+    }
+
+    function paintTabs() {
+        if (!isDepositMenu()) return;
+        const row = nativeTabRow();
+        if (!row) return;
+        const ours = isOurTab();
+        const type = depositType();
+        Array.from(row.children).forEach((el) => {
+            if (el.id === TAB_ID) {
+                el.className = ours ? 'tab-active' : 'tab-nonactive';
+                return;
+            }
+            if (ours) {
+                if (isNativeAutoEl(el) || isNativeBankEl(el)) el.className = 'tab-nonactive';
+                return;
+            }
+            if (isNativeAutoEl(el)) el.className = type === '3' ? 'tab-active' : 'tab-nonactive';
+            else if (isNativeBankEl(el)) el.className = type === '1' ? 'tab-active' : 'tab-nonactive';
+        });
+    }
+
+    function setOurHashQuiet() {
+        const url = location.pathname + location.search + TAB_HASH;
+        if (location.hash === TAB_HASH) return;
+        history.replaceState(null, '', url);
+    }
+
+    function goOurTab() {
+        try { sessionStorage.removeItem(NATIVE_AUTO_KEY); } catch (_) {}
+        if (depositType() === '3') {
+            setOurHashQuiet();
+            paintTabs();
+            syncInjectPanel('tab').catch(() => {});
+            return;
+        }
+        window.location = '/user/deposit?type=3' + TAB_HASH;
+    }
+
+    function markNativeAuto() {
+        try { sessionStorage.setItem(NATIVE_AUTO_KEY, '1'); } catch (_) {}
+    }
+
+    function consumeNativeAuto() {
+        try {
+            if (sessionStorage.getItem(NATIVE_AUTO_KEY) === '1') {
+                sessionStorage.removeItem(NATIVE_AUTO_KEY);
+                return true;
+            }
+        } catch (_) {}
+        return false;
+    }
+
+    function bindNativeTabClicks(row) {
+        if (!row || row.getAttribute('data-mtb-tab-bound') === '1') return;
+        row.setAttribute('data-mtb-tab-bound', '1');
+        row.addEventListener('click', function (e) {
+            const el = e.target && e.target.closest && e.target.closest('div.tab-active, div.tab-nonactive');
+            if (isNativeAutoEl(el)) markNativeAuto();
+        }, true);
+    }
+
+    function preferOurTabOnEntry() {
+        if (PREVIEW) return true;
+        if (!isDepositMenu()) return false;
+        if (depositType() === '1') return false;
+        if (isOurTab()) return true;
+        if (depositType() === '3' && consumeNativeAuto()) return false;
+        if (depositType() === '3' || depositType() === '') {
+            goOurTab();
+            return true;
+        }
+        return false;
+    }
+
+    function ensureOurTab() {
+        if (!isDepositMenu()) return null;
+        const row = nativeTabRow();
+        if (!row) return null;
+        bindNativeTabClicks(row);
+        let tab = document.getElementById(TAB_ID);
+        if (!tab) {
+            tab = document.createElement('div');
+            tab.id = TAB_ID;
+            tab.innerHTML = '<i class="fas fa-qrcode"></i> QRIS INSTANT';
+            tab.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                goOurTab();
+            });
+            row.insertBefore(tab, row.firstChild);
+        }
+        paintTabs();
+        return row;
+    }
+
+    function insertBelowTabs(wrap) {
+        if (!wrap) return false;
+        const row = nativeTabRow();
+        if (row && row.parentElement) {
+            if (wrap.previousElementSibling === row) return true;
+            row.parentElement.insertBefore(wrap, row.nextElementSibling);
+            return wrap.previousElementSibling === row;
+        }
+        const form = nativeForm();
+        if (form && form.parentElement) {
+            form.parentElement.insertBefore(wrap, form);
+            return wrap.parentElement === form.parentElement;
+        }
+        return false;
+    }
+
+    function setNativeHidden(hide) {
+        const leftover = document.getElementById('mtb-qris-hide-native');
+        if (leftover) leftover.remove();
+        document.querySelectorAll('form[data-mtb-hidden="1"]').forEach((el) => {
+            if (hide && isDepositQrisPage() && el === nativeForm()) return;
+            el.style.display = '';
+            el.removeAttribute('data-mtb-hidden');
+        });
+        if (!hide || !isDepositQrisPage()) return;
+        const form = nativeForm();
+        if (!form) return;
+        form.style.display = 'none';
+        form.setAttribute('data-mtb-hidden', '1');
+    }
+
+    function formatRp(n) {
+        const v = parseInt(n, 10) || 0;
+        return 'Rp ' + v.toLocaleString('id-ID');
+    }
+
+    function parseDigits(s) {
+        return String(s || '').replace(/[^\d]/g, '');
+    }
+
+    function paymentHealthUrl() {
+        return CFG.HEALTH_BASE + '/api/payment-health-v2';
+    }
+
+    async function checkPaymentHealth(forceRefresh) {
+        if (CFG.SKIP_STORE_KEY) return true;
+        if (!CFG.STORE_KEY) {
+            logHealthState(false);
+            return false;
+        }
+        const now = Date.now();
+        if (
+            !forceRefresh &&
+            paymentHealthCache !== null &&
+            paymentHealthCacheKey === CFG.STORE_KEY &&
+            (now - paymentHealthCacheAt) < PAYMENT_HEALTH_TTL
+        ) {
+            return paymentHealthCache;
+        }
+        try {
+            const res = await fetch(paymentHealthUrl(), {
+                method: 'GET',
+                cache: 'no-store',
+                headers: { Accept: 'application/json', 'X-Store-Key': CFG.STORE_KEY },
+            });
+            const body = await res.json().catch(() => ({}));
+            const ok = res.ok && body?.success === true;
+            paymentHealthCache = ok;
+            paymentHealthCacheKey = CFG.STORE_KEY;
+            paymentHealthCacheAt = now;
+            logHealthState(ok);
+            return ok;
+        } catch (e) {
+            paymentHealthCache = false;
+            paymentHealthCacheKey = CFG.STORE_KEY;
+            paymentHealthCacheAt = now;
+            logHealthState(false);
+            debugLog('health error', e);
+            return false;
+        }
+    }
+
+    function injectCss() {
+        if (document.getElementById('mtb-qris-css')) return;
+        const el = document.createElement('style');
+        el.id = 'mtb-qris-css';
+        el.textContent = `
+#${PANEL_ID}{
+  --mtb-bg:#00442F;--mtb-deep:#001D14;--mtb-text:#fff;--mtb-muted:rgba(255,255,255,.72);
+  --mtb-accent:#FDC23A;--mtb-accent-hover:#FFD15A;--mtb-accent-text:#001739;
+  --mtb-border:rgba(253,194,58,.45);--mtb-btn-bg:rgba(253,194,58,.16);
+  --mtb-shadow:0 4px 16px rgba(0,0,0,.45);
+  font-family:Segoe UI,system-ui,sans-serif;margin:0 0 16px;position:relative;z-index:1;width:100%;
+}
+#${PANEL_ID} *{box-sizing:border-box}
+#${PANEL_ID} .mtb-card{
+  position:relative;background:var(--mtb-bg);color:var(--mtb-text);padding:22px;
+  border-radius:12px;border:1px solid var(--mtb-border);box-shadow:var(--mtb-shadow);
+  overflow:hidden;
+}
+#${PANEL_ID} .mtb-badge{
+  position:absolute;top:-8px;right:12px;background:rgba(253,194,58,.22);color:var(--mtb-accent);
+  font-size:10px;font-weight:700;padding:3px 8px;border-radius:3px;letter-spacing:.02em;
+}
+#${PANEL_ID} .mtb-head{margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--mtb-border)}
+#${PANEL_ID} .mtb-title{margin:0;font-size:18px;font-weight:700;color:var(--mtb-text)}
+#${PANEL_ID} .mtb-sub{margin:6px 0 0;font-size:13px;color:var(--mtb-muted)}
+#${PANEL_ID} form{display:flex;flex-direction:column;gap:4px}
+#${PANEL_ID} label{display:block;margin-bottom:6px;font-weight:500;color:var(--mtb-text)}
+#${PANEL_ID} .mtb-user{
+  width:100%;padding:12px;border:1px solid var(--mtb-border);border-radius:6px;
+  background:var(--mtb-deep);color:var(--mtb-text);font-size:16px;
+}
+#${PANEL_ID} .mtb-chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+#${PANEL_ID} .mtb-chip{
+  flex:1 1 auto;min-width:110px;padding:10px 12px;border-radius:6px;
+  border:2px solid var(--mtb-accent)!important;background:var(--mtb-deep)!important;color:var(--mtb-accent)!important;
+  font-weight:700;cursor:pointer;position:relative;z-index:5;
+}
+#${PANEL_ID} .mtb-chip:hover,#${PANEL_ID} .mtb-chip.is-active{
+  background:var(--mtb-accent)!important;color:var(--mtb-accent-text)!important;border-color:var(--mtb-accent)!important;
+}
+#${PANEL_ID} .mtb-amt-row{display:flex;width:100%}
+#${PANEL_ID} .mtb-amt-prefix{
+  background:var(--mtb-deep);padding:12px 14px;border:1px solid var(--mtb-border);border-right:none;
+  border-radius:6px 0 0 6px;color:var(--mtb-muted);display:flex;align-items:center;font-weight:700;
+}
+#${PANEL_ID} .mtb-amount{
+  flex:1;width:100%;padding:12px;border:1px solid var(--mtb-border);border-radius:0 6px 6px 0;
+  background:var(--mtb-deep);color:var(--mtb-text);font-size:16px;
+}
+#${PANEL_ID} .mtb-hint{display:block;margin:6px 0 0;font-size:12px;color:var(--mtb-muted)}
+#${PANEL_ID} .mtb-submit{
+  width:100%;margin-top:12px;padding:14px;border:none;border-radius:6px;
+  background:var(--mtb-accent);color:var(--mtb-accent-text);font-size:16px;font-weight:700;cursor:pointer;
+}
+#${PANEL_ID} .mtb-submit:hover{background:var(--mtb-accent-hover)}
+#${PANEL_ID} .mtb-submit:disabled{background:var(--mtb-btn-bg);color:var(--mtb-muted);cursor:not-allowed}
+#${PANEL_ID} .mtb-result{display:none;margin-top:16px}
+#${PANEL_ID} .mtb-result.active{display:block}
+#${PANEL_ID} .mtb-frame{min-height:400px;text-align:center}
+#${PANEL_ID} .mtb-ok{padding:16px;background:rgba(253,194,58,.16);border:2px solid var(--mtb-accent);border-radius:8px}
+@media (max-width:720px){
+  #${PANEL_ID} .mtb-card{padding:12px}
+  #${PANEL_ID} .mtb-title{font-size:15px}
+  #${PANEL_ID} .mtb-chip{min-width:30%;padding:10px 8px}
+  #${PANEL_ID} .mtb-submit{padding:16px}
+}`;
+        document.head.appendChild(el);
+    }
+
+    function buildChips() {
+        return CFG.BUTTONS.map((n) =>
+            `<button type="button" class="mtb-chip" data-amount="${n}">${formatRp(n)}</button>`
+        ).join('');
+    }
+
+    function buildPanel(username) {
+        return `
+<div class="mtb-card">
+  <div class="mtb-head">
+    <div>
+      <div class="mtb-kicker">Auto approve</div>
+      <div class="mtb-title" id="mtbQrisTitle">QRIS Instant Auto</div>
+    </div>
+    <span class="mtb-badge">QRIS</span>
+  </div>
+  <form id="mtbFormDepositQris" autocomplete="off">
+    <input type="hidden" id="mtbQrisUsername" value="${username}">
+    <div>
+      <label for="mtbQrisUsernameDisplay">Username</label>
+      <input class="mtb-user" id="mtbQrisUsernameDisplay" disabled translate="no" value="${username}">
+    </div>
+    <div>
+      <label>Jumlah deposit</label>
+      <div class="mtb-chips">${buildChips()}</div>
+      <input type="hidden" id="mtbDepositAmountHidden" value="0">
+      <input class="mtb-amount" id="mtbDepositInput" placeholder="Rp 0" inputmode="numeric" autocomplete="off">
+      <div class="mtb-hint">Min ${formatRp(CFG.MIN_DEPO)} · Max ${formatRp(CFG.MAX_DEPO)}</div>
+    </div>
+    <button type="submit" class="mtb-submit" id="mtbQrisSubmitBtn">
+      <span id="mtbQrisBtnText">TAMPILKAN QRIS</span>
+    </button>
+  </form>
+  <div class="mtb-result" id="mtbQrisResult">
+    <div class="mtb-frame" id="mtb-qris-payment-frame"></div>
+    <div id="mtb-qris-payment-result"></div>
+  </div>
+</div>`;
+    }
+
+    function syncChipActive(amount) {
+        document.querySelectorAll(`#${PANEL_ID} .mtb-chip`).forEach((el) => {
+            el.classList.toggle('is-active', String(el.getAttribute('data-amount')) === String(amount));
+        });
+    }
+
+    function setInjectAmount(amount) {
+        const n = parseInt(amount, 10) || 0;
+        const input = document.getElementById('mtbDepositInput');
+        const hidden = document.getElementById('mtbDepositAmountHidden');
+        if (hidden) hidden.value = String(n);
+        if (input) input.value = n ? formatRp(n) : '';
+        syncChipActive(n);
+        return n;
+    }
+
+    function readInjectAmount() {
+        const hidden = document.getElementById('mtbDepositAmountHidden');
+        if (hidden?.value && hidden.value !== '0') return parseInt(hidden.value, 10) || 0;
+        return syncAmountFromInput();
+    }
+
+    function syncAmountFromInput() {
+        const input = document.getElementById('mtbDepositInput');
+        const hidden = document.getElementById('mtbDepositAmountHidden');
+        if (!input || !hidden) return 0;
+        const digits = parseDigits(input.value);
+        if (!digits) {
+            input.value = '';
+            hidden.value = '0';
+            syncChipActive(0);
+            return 0;
+        }
+        const n = parseInt(digits, 10) || 0;
+        hidden.value = String(n);
+        input.value = formatRp(n);
+        syncChipActive(n);
+        return n;
+    }
+
+    function teardownInject(reason) {
+        const wrap = document.getElementById(PANEL_ID);
+        if (wrap) wrap.remove();
+        setNativeHidden(false);
+        injectHandlersAttached = false;
+        if (!isDepositMenu()) {
+            const tab = document.getElementById(TAB_ID);
+            if (tab) tab.remove();
+        } else {
+            paintTabs();
+        }
+        debugLog('teardown', reason || '');
+    }
+
+    function ensureOnTop() {
+        const wrap = document.getElementById(PANEL_ID);
+        if (!wrap) return false;
+        return insertBelowTabs(wrap);
+    }
+
+    function extractRefId(data) {
+        if (!data || typeof data !== 'object') return '';
+        const l1 = data.data || data;
+        const l2 = (l1 && typeof l1 === 'object') ? (l1.data || l1) : l1;
+        for (const val of [l2?.ref_id, l2?.refid, l1?.ref_id, l1?.refid, data.ref_id, data.refid]) {
+            if (val != null && String(val).trim()) return String(val).trim();
+        }
+        return '';
+    }
+
+    function withCreateTransactionHook(onRef) {
+        const orig = window.fetch;
+        let done = false;
+        window.fetch = async function (...args) {
+            const res = await orig.apply(this, args);
+            const url = String(args[0] || '');
+            if (!done && url.includes('create-transaction')) {
+                done = true;
+                try {
+                    const data = await res.clone().json();
+                    const refId = extractRefId(data);
+                    if (refId) {
+                        window.__MARTABAK_LAST_REFID__ = refId;
+                        onRef(refId, data);
+                    }
+                } catch (_) {}
+            }
+            return res;
+        };
+        return function restore() {
+            if (window.fetch !== orig) window.fetch = orig;
+        };
+    }
+
+    function loadQrisSDK() {
+        return new Promise((resolve, reject) => {
+            if (typeof window.QrisSDK !== 'undefined') {
+                resolve();
+                return;
+            }
+            const script = document.createElement('script');
+            script.src = SDK_URL;
+            script.onload = () => resolve();
+            script.onerror = () => reject(new Error('Gagal load QRIS SDK'));
+            document.head.appendChild(script);
+        });
+    }
+
+    function resetInjectForm() {
+        const form = document.getElementById('mtbFormDepositQris');
+        const result = document.getElementById('mtbQrisResult');
+        const btn = document.getElementById('mtbQrisSubmitBtn');
+        const btnText = document.getElementById('mtbQrisBtnText');
+        const frame = document.getElementById('mtb-qris-payment-frame');
+        const payResult = document.getElementById('mtb-qris-payment-result');
+        if (form) form.style.display = '';
+        if (result) result.classList.remove('active');
+        if (frame) frame.innerHTML = '';
+        if (payResult) payResult.innerHTML = '';
+        if (btn) btn.disabled = false;
+        if (btnText) btnText.textContent = 'TAMPILKAN QRIS';
+        setInjectAmount(0);
+    }
+
+    async function startQrisPayment(username, amount) {
+        if (typeof window.QrisSDK === 'undefined') await loadQrisSDK();
+        const form = document.getElementById('mtbFormDepositQris');
+        const resultBox = document.getElementById('mtbQrisResult');
+        const btn = document.getElementById('mtbQrisSubmitBtn');
+        const btnText = document.getElementById('mtbQrisBtnText');
+        const frame = document.getElementById('mtb-qris-payment-frame');
+        const payResult = document.getElementById('mtb-qris-payment-result');
+        if (form) form.style.display = 'none';
+        if (resultBox) resultBox.classList.add('active');
+        if (frame) frame.innerHTML = '';
+        if (payResult) payResult.innerHTML = '';
+        if (btn) btn.disabled = true;
+        if (btnText) btnText.textContent = 'Memuat...';
+
+        const invoice = CFG.INVOICE_PREFIX + Date.now();
+        const restoreFetch = withCreateTransactionHook((refId) => {
+            debugLog('ref_id', refId);
+        });
+
+        try {
+            const payment = new window.QrisSDK({
+                healthCheckEnabled: false,
+                storeKey: CFG.STORE_KEY,
+                store_key: CFG.STORE_KEY,
+                amount,
+                invoice,
+                notes: `QRIS ${invoice}`,
+                username,
+                payor_name: username,
+                payor_email: '',
+                displayMode: 'inline',
+                containerId: 'mtb-qris-payment-frame',
+                resultContainerId: 'mtb-qris-payment-result',
+                onSuccess: () => {
+                    if (payResult) {
+                        payResult.innerHTML = `<div class="mtb-ok"><h4>Pembayaran Berhasil!</h4><p>Deposit ${formatRp(amount)} sedang diproses</p></div>`;
+                    }
+                    if (btnText) btnText.textContent = 'Selesai';
+                    setTimeout(resetInjectForm, 8000);
+                },
+                onFailed: () => {
+                    alert('Gagal buat QR. Coba lagi.');
+                    resetInjectForm();
+                },
+                onCancel: () => resetInjectForm(),
+            });
+            payment.openPayment();
+            setTimeout(() => { if (restoreFetch) restoreFetch(); }, 30000);
+        } catch (err) {
+            if (restoreFetch) restoreFetch();
+            throw err;
+        }
+    }
+
+    function attachInjectHandlers() {
+        if (injectHandlersAttached) return;
+        const form = document.getElementById('mtbFormDepositQris');
+        if (!form) return;
+        injectHandlersAttached = true;
+
+        const amountInput = document.getElementById('mtbDepositInput');
+        if (amountInput) {
+            const onAmt = () => syncAmountFromInput();
+            amountInput.addEventListener('input', onAmt);
+            amountInput.addEventListener('change', onAmt);
+            amountInput.addEventListener('blur', onAmt);
+        }
+        document.querySelectorAll(`#${PANEL_ID} .mtb-chip`).forEach((chip) => {
+            chip.addEventListener('click', (e) => {
+                e.preventDefault();
+                setInjectAmount(chip.getAttribute('data-amount'));
+            });
+        });
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (formSubmitInProgress) return false;
+
+            const healthOk = await checkPaymentHealth(true);
+            if (!healthOk) {
+                teardownInject('payment-health OFF');
+                alert('Layanan QRIS sedang OFF. Coba lagi nanti.');
+                return false;
+            }
+
+            const username = (
+                document.getElementById('mtbQrisUsername')?.value ||
+                readUsernameFromDom() ||
+                ''
+            ).trim();
+            if (!isValidUser(username)) {
+                alert('Username tidak ditemukan. Login dulu.');
+                return false;
+            }
+
+            const amount = syncAmountFromInput();
+            if (!amount) {
+                alert(`Masukkan jumlah deposit (min ${formatRp(CFG.MIN_DEPO)})`);
+                return false;
+            }
+            if (amount < CFG.MIN_DEPO) {
+                alert(`Minimal deposit ${formatRp(CFG.MIN_DEPO)}`);
+                return false;
+            }
+            if (amount > CFG.MAX_DEPO) {
+                alert(`Maksimal deposit ${formatRp(CFG.MAX_DEPO)}`);
+                return false;
+            }
+
+            formSubmitInProgress = true;
+            try {
+                await startQrisPayment(username, amount);
+            } catch (err) {
+                debugLog('Error', err);
+                alert(err?.message || 'Terjadi kesalahan');
+                resetInjectForm();
+            } finally {
+                setTimeout(() => { formSubmitInProgress = false; }, 2000);
+            }
+            return false;
+        });
+    }
+
+    async function injectQrisPanel(force) {
+        if (!isDepositQrisPage()) return false;
+        const existing = document.getElementById(PANEL_ID);
+        if (existing && !force) {
+            ensureOnTop();
+            setNativeHidden(true);
+            return true;
+        }
+        const username = await resolveUsername();
+        injectCss();
+        if (existing) existing.remove();
+        const wrap = document.createElement('div');
+        wrap.id = PANEL_ID;
+        wrap.setAttribute('data-mtb-ver', VERSION);
+        wrap.innerHTML = buildPanel(username);
+        let placed = insertBelowTabs(wrap);
+        if (!placed) {
+            for (let i = 0; i < 25 && !placed; i++) {
+                await new Promise((r) => setTimeout(r, 160));
+                if (!isDepositQrisPage()) break;
+                placed = insertBelowTabs(wrap);
+            }
+        }
+        if (!placed) {
+            wrap.remove();
+            console.warn(LOG, 'inject gagal — mount deposit type=3 belum ada');
+            return false;
+        }
+        setNativeHidden(true);
+        injectHandlersAttached = false;
+        attachInjectHandlers();
+        debugLog('injected user=', username, 'v' + VERSION);
+        return true;
+    }
+
+    async function syncInjectPanel(reason) {
+        if (isDepositMenu()) ensureOurTab();
+        if (!isOurTab()) {
+            teardownInject(reason || 'native-tab');
+            return;
+        }
+        const healthOk = await checkPaymentHealth(true);
+        const panel = document.getElementById(PANEL_ID);
+        if (!healthOk) {
+            if (panel) teardownInject(`payment-health OFF${reason ? ` (${reason})` : ''}`);
+            return;
+        }
+        if (!panel && !reinjectionInProgress) {
+            reinjectionInProgress = true;
+            try {
+                await injectQrisPanel(true);
+            } finally {
+                reinjectionInProgress = false;
+            }
+        } else if (panel) {
+            ensureOnTop();
+            setNativeHidden(true);
+        }
+    }
+
+    function startHealthMonitor() {
+        if (healthMonitorStarted || CFG.SKIP_STORE_KEY || !CFG.STORE_KEY) return;
+        healthMonitorStarted = true;
+        const ms = Math.max(5, CFG.HEALTH_POLL_SEC) * 1000;
+        setInterval(() => {
+            syncInjectPanel('poll').catch((e) => debugLog('poll', e));
+        }, ms);
+    }
+
+    function startPathGuard() {
+        if (pathGuardStarted) return;
+        pathGuardStarted = true;
+        const check = () => {
+            if (!isDepositMenu()) {
+                teardownInject('path-lock');
+                return;
+            }
+            ensureOurTab();
+            if (!isOurTab()) {
+                teardownInject('native-tab');
+                return;
+            }
+            syncInjectPanel('path').catch(() => {});
+        };
+        setInterval(check, 800);
+        window.addEventListener('popstate', check);
+        window.addEventListener('hashchange', check);
+    }
+
+    async function boot(opts) {
+        const rehook = opts?.rehook === true;
+        if (!isDepositMenu()) {
+            teardownInject('bukan /user/deposit');
+            return { ok: false, reason: 'path-lock' };
+        }
+        try { history.scrollRestoration = 'manual'; } catch (_) {}
+        if (location.hash === TAB_HASH) {
+            window.scrollTo(0, 0);
+        }
+        ensureOurTab();
+        preferOurTabOnEntry();
+        if (!isOurTab()) {
+            teardownInject('native AUTO/BANK');
+            startHealthMonitor();
+            startPathGuard();
+            console.log(LOG, 'boot tab-only', VERSION, 'AUTO/BANK native');
+            return { ok: true, version: VERSION, tab: true, injected: false };
+        }
+        if (rehook) {
+            injectHandlersAttached = false;
+            const old = document.getElementById(PANEL_ID);
+            if (old) old.remove();
+        }
+        const healthOk = await checkPaymentHealth(true);
+        if (!healthOk) {
+            console.warn(LOG, 'health OFF — panel tidak tampil. Tambah ?store_key= di src martabak.js');
+            teardownInject('boot health OFF');
+            startHealthMonitor();
+            return { ok: false, reason: 'health-off', version: VERSION };
+        }
+        const injected = await injectQrisPanel(rehook);
+        startHealthMonitor();
+        console.log(LOG, 'boot', {
+            ok: !!injected,
+            version: VERSION,
+            user: readUsernameFromDom(),
+            injected: !!document.getElementById(PANEL_ID),
+            path: depositPath() + location.search,
+        });
+        return {
+            ok: !!injected,
+            version: VERSION,
+            user: readUsernameFromDom(),
+            injected: !!document.getElementById(PANEL_ID),
+            min: CFG.MIN_DEPO,
+            path: depositPath() + location.search,
+        };
+    }
+
+    window.__MARTABAK_QRIS_BOOT__ = boot;
+    window.MARTABAK_QRIS_STATUS = function () {
+        return {
+            version: VERSION,
+            user: readUsernameFromDom(),
+            amount: readInjectAmount(),
+            injected: !!document.getElementById(PANEL_ID),
+            lastRef: window.__MARTABAK_LAST_REFID__ || null,
+            pathOk: isDepositQrisPage(),
+        };
+    };
+
+    startPathGuard();
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => boot());
+    } else {
+        boot();
+    }
+})();
