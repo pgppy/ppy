@@ -14,7 +14,7 @@
     'use strict';
 
     const LOG = '[BIDADARI-QRIS]';
-    const VERSION = '1.0.0';
+    const VERSION = '1.0.1';
 
     if (window.__BIDADARI_QRIS_BOOTED__ === VERSION) {
         console.log(LOG, 'already booted', VERSION);
@@ -450,17 +450,17 @@
         console.log(LOG, 'Injection dihapus');
     }
 
-    // UG Sports money site (RajaBM theme-3): body #471525, header #181733, button #FDBB2C
+    // Bidadari22 live: body/card #824BA8, header #512F68, CTA contrast gold #FDBB2C
     const THEME_MONEY = {
-        bg: '#471525',
-        bgDeep: '#181733',
+        bg: '#824BA8',
+        bgDeep: '#2A1240',
         text: '#FFFFFF',
         muted: 'rgba(255, 255, 255, 0.72)',
         accent: '#FDBB2C',
         accentHover: '#FFD15A',
         accentText: '#181733',
-        border: 'rgba(253, 187, 44, 0.38)',
-        btnBg: 'rgba(253, 187, 44, 0.12)',
+        border: 'rgba(253, 187, 44, 0.85)',
+        btnBg: '#181733',
         badgeBg: 'rgba(253, 187, 44, 0.20)',
         successBg: 'rgba(253, 187, 44, 0.16)',
         shadow: '0 4px 16px rgba(0, 0, 0, 0.45)',
@@ -494,11 +494,25 @@
         return rgb.map((n) => Math.round(Math.max(0, Math.min(255, n + (255 - n) * f))));
     }
 
-    function isUsableAccent(rgb) {
+    function colorDist(a, b) {
+        if (!a || !b) return 999;
+        return Math.sqrt(
+            Math.pow(a[0] - b[0], 2) +
+            Math.pow(a[1] - b[1], 2) +
+            Math.pow(a[2] - b[2], 2)
+        );
+    }
+
+    function isUsableAccent(rgb, bg) {
         if (!rgb) return false;
         const max = Math.max(rgb[0], rgb[1], rgb[2]);
         const min = Math.min(rgb[0], rgb[1], rgb[2]);
-        return max - min >= 20 && max >= 70;
+        if (max - min < 28 || max < 110) return false;
+        if (bg) {
+            if (colorDist(rgb, bg) < 95) return false;
+            if (Math.abs(luminance(rgb) - luminance(bg)) < 0.18) return false;
+        }
+        return true;
     }
 
     function sampleComputed(sel, prop) {
@@ -511,7 +525,8 @@
         }
     }
 
-    function sampleAccentColor() {
+    function sampleAccentColor(bgRgb) {
+        const gold = [253, 187, 44];
         const nodes = document.querySelectorAll([
             'a.button',
             '.payment-methods-items.online',
@@ -526,34 +541,35 @@
             const cs = getComputedStyle(nodes[i]);
             for (const prop of ['backgroundColor', 'borderBottomColor', 'borderColor', 'color']) {
                 const rgb = parseRgb(cs[prop]);
-                if (isUsableAccent(rgb)) return rgb;
+                if (isUsableAccent(rgb, bgRgb)) return rgb;
             }
         }
-        return [253, 187, 44];
+        return gold;
     }
 
     function getInjectTheme() {
         const t = Object.assign({}, THEME_MONEY);
         const bodyBg = sampleComputed('body', 'backgroundColor')
             || sampleComputed('.deposit', 'backgroundColor')
-            || [71, 21, 37];
+            || [130, 75, 168];
         const headerBg = sampleComputed('.header-wrapper', 'backgroundColor')
             || sampleComputed('.main-header', 'backgroundColor')
             || [24, 23, 51];
         const textRgb = sampleComputed('body', 'color')
             || sampleComputed('.user-account', 'color')
             || [255, 255, 255];
-        const accentRgb = sampleAccentColor();
+        const accentRgb = sampleAccentColor(bodyBg);
 
         t.bg = rgbToHex(bodyBg);
-        t.bgDeep = rgbToHex(luminance(headerBg) < luminance(bodyBg) ? headerBg : darken(bodyBg, 0.62));
+        const deepRgb = luminance(headerBg) < luminance(bodyBg) ? darken(headerBg, 0.62) : darken(bodyBg, 0.45);
+        t.bgDeep = luminance(deepRgb) > 0.22 ? '#2A1240' : rgbToHex(deepRgb);
         t.text = rgbToHex(textRgb);
         t.muted = rgbToRgba(textRgb, 0.72);
         t.accent = rgbToHex(accentRgb);
         t.accentHover = rgbToHex(lighten(accentRgb, 0.22));
-        t.accentText = luminance(accentRgb) > 0.55 ? rgbToHex(headerBg) : '#FFFFFF';
-        t.border = rgbToRgba(accentRgb, 0.38);
-        t.btnBg = rgbToRgba(accentRgb, 0.12);
+        t.accentText = luminance(accentRgb) > 0.55 ? '#181733' : '#FFFFFF';
+        t.border = rgbToRgba(accentRgb, 0.85);
+        t.btnBg = t.bgDeep;
         t.badgeBg = rgbToRgba(accentRgb, 0.20);
         t.successBg = rgbToRgba(accentRgb, 0.16);
         console.log(LOG, 'Theme from money site', t);
@@ -686,7 +702,7 @@
                 color: var(--ug-text);
                 padding: ${m ? '12px' : '22px'};
                 border-radius: ${m ? '8px' : '12px'};
-                border: 1px solid var(--ug-border);
+                border: 2px solid var(--ug-accent);
                 box-shadow: var(--ug-shadow);
                 box-sizing: border-box;
                 width: 100%;
@@ -707,25 +723,32 @@
                 font-size: ${m ? '14px' : '16px'};
             }
             .qris-amount-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
-            .qris-amount-btn {
+            #BIDADARI-poppay-wrapper button.qris-amount-btn,
+            #BIDADARI-poppay-wrapper .qris-amount-btn {
                 flex: 1 1 auto;
                 min-width: ${m ? '30%' : '110px'};
                 padding: ${m ? '10px 8px' : '10px 12px'};
                 border-radius: 6px;
-                border: 1px solid var(--ug-border);
-                background: var(--ug-btn-bg);
-                color: var(--ug-text);
+                border: 2px solid var(--ug-accent) !important;
+                background: var(--ug-bg-deep) !important;
+                color: var(--ug-accent) !important;
+                font-weight: 700 !important;
                 cursor: pointer;
                 pointer-events: auto !important;
                 position: relative;
                 z-index: 5;
                 -webkit-tap-highlight-color: transparent;
                 touch-action: manipulation;
+                box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
             }
-            .qris-amount-btn:hover, .qris-amount-btn.active {
+            #BIDADARI-poppay-wrapper button.qris-amount-btn:hover,
+            #BIDADARI-poppay-wrapper .qris-amount-btn:hover,
+            #BIDADARI-poppay-wrapper button.qris-amount-btn.active,
+            #BIDADARI-poppay-wrapper .qris-amount-btn.active {
                 background: var(--ug-accent) !important;
                 color: var(--ug-accent-text) !important;
-                border-color: var(--ug-accent) !important;
+                border-color: var(--ug-accent-hover) !important;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
             }
             .qris-input-group { display: flex; width: 100%; }
             .qris-input-prefix {
@@ -740,19 +763,34 @@
             }
             .qris-input-group .qris-input { border-radius: 0 6px 6px 0; }
             .qris-input-hint { display: block; margin-top: 6px; font-size: 12px; color: var(--ug-muted); }
-            .qris-submit-btn {
+            #BIDADARI-poppay-wrapper button.qris-submit-btn,
+            #BIDADARI-poppay-wrapper .qris-submit-btn {
                 width: 100%;
                 margin-top: 12px;
                 padding: ${m ? '16px' : '14px'};
-                background: var(--ug-accent);
-                color: var(--ug-accent-text);
-                border: none;
+                background: var(--ug-accent) !important;
+                color: var(--ug-accent-text) !important;
+                border: 2px solid var(--ug-accent-hover) !important;
                 border-radius: 6px;
                 font-size: 16px;
-                font-weight: 600;
+                font-weight: 800 !important;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
                 cursor: pointer;
+                box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
             }
-            .qris-submit-btn:disabled { background: var(--ug-btn-bg); color: var(--ug-muted); cursor: not-allowed; }
+            #BIDADARI-poppay-wrapper button.qris-submit-btn:hover,
+            #BIDADARI-poppay-wrapper .qris-submit-btn:hover {
+                background: var(--ug-accent-hover) !important;
+            }
+            #BIDADARI-poppay-wrapper button.qris-submit-btn:disabled,
+            #BIDADARI-poppay-wrapper .qris-submit-btn:disabled {
+                background: var(--ug-bg-deep) !important;
+                color: var(--ug-muted) !important;
+                border-color: var(--ug-border) !important;
+                box-shadow: none;
+                cursor: not-allowed;
+            }
             .qris-result { display: none; margin-top: 16px; }
             .qris-result.active { display: block; }
             .ug-qris-success-box {
@@ -1007,8 +1045,13 @@
         }
         if (document.getElementById('BIDADARI-poppay-qris-full')) {
             const existing = document.getElementById('BIDADARI-poppay-wrapper');
-            if (existing && existing.closest('.deposit .methods_form')) {
+            if (
+                existing &&
+                existing.getAttribute('data-bidadari-ver') === VERSION &&
+                existing.closest('.deposit .methods_form')
+            ) {
                 hideNativeInstant();
+                applyInjectTheme(existing);
                 return true;
             }
             teardownInjection();
@@ -1027,6 +1070,7 @@
         const wrapper = document.createElement('div');
         wrapper.id = 'BIDADARI-poppay-wrapper';
         wrapper.setAttribute('data-BESTIE-persistent', 'true');
+        wrapper.setAttribute('data-bidadari-ver', VERSION);
         applyInjectTheme(wrapper);
 
         const inner = document.createElement('div');
