@@ -1,21 +1,22 @@
 // ============================================================================
 // Martabak188 QRIS Instant inject — martabak.js
-// Tab native AUTO (type=3) + BANK (type=1) tidak diubah (onclick tetap).
-// Tab baru "QRIS INSTANT" (#qris-instant). Masuk menu Deposit → tab kita.
-// Klik AUTO → form native; klik BANK → type=1 native.
+// Health ON: tab kita QRIS INSTANT + AUTO/BANK native tetap (desktop & mobile).
+// Native tab "QRIS INSTANT" duplikat (bukan AUTO/BANK) di-hide saat health ON.
+// Health OFF: tab kita + panel hilang, AUTO/BANK native, duplikat native balik.
+// Path: /user/deposit + /mobile/user/deposit
 // SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
 // Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
 // Embed:
 // <script src=".../martabak.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000"></script>
-// Username: header "Selamat datang," + .menu-top (bukan DOM acak)
-// Native form type=3 di-hide saat panel ON; health OFF → native kembali
+// Username: header "Selamat datang," / .menu-top
+// Native form type=3 di-hide saat panel ON
 // ============================================================================
 
 (function () {
     'use strict';
 
     const LOG = '[MARTABAK-QRIS]';
-    const VERSION = '1.0.8';
+    const VERSION = '1.1.3';
     const SDK_URL = 'https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
     const PANEL_ID = 'mtb-qris-inject-wrap';
     const TAB_ID = 'mtb-poppay-tab';
@@ -42,6 +43,7 @@
     let healthMonitorStarted = false;
     let lastHealthLogged = null;
     let pathGuardStarted = false;
+    let healthReady = false;
     const PAYMENT_HEALTH_TTL = 30000;
 
     function parseBool(raw, fallback) {
@@ -135,8 +137,17 @@
         return (location.pathname || '').replace(/\/+$/, '').toLowerCase();
     }
 
+    function isMobileDeposit() {
+        return depositPath() === '/mobile/user/deposit';
+    }
+
     function isDepositMenu() {
-        return PREVIEW || depositPath() === '/user/deposit';
+        const p = depositPath();
+        return PREVIEW || p === '/user/deposit' || p === '/mobile/user/deposit';
+    }
+
+    function depositBase() {
+        return isMobileDeposit() ? '/mobile/user/deposit' : '/user/deposit';
     }
 
     function depositType() {
@@ -157,20 +168,34 @@
         const t = String(v || '').trim();
         if (!t || t.length < 3 || t.length > 32) return false;
         if (/\s/.test(t)) return false;
-        if (/^(username|user|member|akun|saya|welcome|deposit|qris)$/i.test(t)) return false;
+        if (/^(username|user|member|akun|saya|welcome|deposit|qris|promo|banking|keluar|saldo|auto|bank|rtp|togel|slot|casino|sport|virtual|crash)$/i.test(t)) return false;
         return /^[a-zA-Z0-9._-]+$/.test(t);
     }
 
     function scrapeWelcomeUser() {
-        const labels = Array.from(document.querySelectorAll('div'));
-        for (const lab of labels) {
-            const txt = (lab.textContent || '').replace(/\s+/g, ' ').trim();
-            if (!/^selamat datang,?$/i.test(txt)) continue;
-            const wrap = lab.parentElement;
-            if (!wrap) continue;
-            const top = wrap.querySelector('.menu-top');
-            const u = (top?.textContent || '').trim();
+        const tops = document.querySelectorAll('.menu-top');
+        for (const top of tops) {
+            const ctx = ((top.parentElement && top.parentElement.textContent) || '').replace(/\s+/g, ' ');
+            if (!/selamat\s+datang/i.test(ctx)) continue;
+            const u = (top.textContent || '').replace(/\s+/g, ' ').trim();
             if (isValidUser(u)) return u;
+        }
+        const nodes = document.querySelectorAll('div, span, p, b, strong, label');
+        for (const lab of nodes) {
+            const own = Array.from(lab.childNodes)
+                .filter((n) => n.nodeType === 3)
+                .map((n) => n.textContent || '')
+                .join(' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (!/^selamat datang,?$/i.test(own)) continue;
+            const wrap = lab.parentElement || lab;
+            const top = wrap.querySelector('.menu-top');
+            const fromTop = (top?.textContent || '').replace(/\s+/g, ' ').trim();
+            if (isValidUser(fromTop)) return fromTop;
+            const nextEl = lab.nextElementSibling;
+            const next = (nextEl?.textContent || '').replace(/\s+/g, ' ').trim();
+            if (nextEl && !nextEl.querySelector('a, button, input') && isValidUser(next)) return next;
         }
         return '';
     }
@@ -195,15 +220,27 @@
     }
 
     async function fetchProfilUser() {
-        try {
-            const r = await fetch('/user/profil', { credentials: 'include', cache: 'no-store' });
-            const html = await r.text();
-            const m = html.match(/Selamat datang,[\s\S]{0,240}?class="menu-top"[^>]*>([^<]+)/i);
-            const u = m ? m[1].replace(/\s+/g, ' ').trim() : '';
-            return isValidUser(u) ? u : '';
-        } catch (_) {
-            return '';
+        const urls = isMobileDeposit()
+            ? ['/mobile/user/profil', '/user/profil']
+            : ['/user/profil', '/mobile/user/profil'];
+        for (const profil of urls) {
+            try {
+                const r = await fetch(profil, { credentials: 'include', cache: 'no-store' });
+                if (!r.ok) continue;
+                const html = await r.text();
+                const patterns = [
+                    /Selamat datang,[\s\S]{0,320}?class="menu-top"[^>]*>([^<]+)/i,
+                    /class="menu-top"[^>]*>([a-zA-Z0-9._-]{3,32})</i,
+                    /selamat\s+datang,?\s*<\/[^>]+>\s*<[^>]+>([a-zA-Z0-9._-]{3,32})/i,
+                ];
+                for (const re of patterns) {
+                    const m = html.match(re);
+                    const u = m ? m[1].replace(/\s+/g, ' ').trim() : '';
+                    if (isValidUser(u)) return u;
+                }
+            } catch (_) {}
         }
+        return '';
     }
 
     async function resolveUsername() {
@@ -223,8 +260,13 @@
     }
 
     function nativeTabRow() {
-        const tabs = Array.from(document.querySelectorAll('div.tab-active, div.tab-nonactive'));
-        const auto = tabs.find((el) => /AUTO/i.test(el.textContent || '') && el.id !== TAB_ID);
+        const tabs = Array.from(document.querySelectorAll('div.tab-active, div.tab-nonactive, div[onclick*="deposit"]'));
+        const autos = tabs.filter((el) => /AUTO/i.test(el.textContent || '') && el.id !== TAB_ID);
+        const visible = autos.find((el) => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        });
+        const auto = visible || autos[0];
         if (!auto) return null;
         return auto.parentElement;
     }
@@ -237,11 +279,67 @@
         return !!(el && el.id !== TAB_ID && /BANK/i.test(el.textContent || ''));
     }
 
+    function tabLabel(el) {
+        return (el && el.textContent || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function isNativeQrisInstantEl(el) {
+        if (!el || el.id === TAB_ID) return false;
+        if (isNativeAutoEl(el) || isNativeBankEl(el)) return false;
+        return /qris\s*instant/i.test(tabLabel(el));
+    }
+
+    function restoreTabDisplay(el) {
+        if (!el || el.getAttribute('data-mtb-tab-hidden') !== '1') return;
+        el.style.removeProperty('display');
+        const prev = el.getAttribute('data-mtb-tab-disp') || '';
+        if (prev) el.style.display = prev;
+        el.removeAttribute('data-mtb-tab-hidden');
+        el.removeAttribute('data-mtb-tab-disp');
+    }
+
+    function hideTabEl(el) {
+        if (!el || el.id === TAB_ID) return;
+        if (!el.hasAttribute('data-mtb-tab-disp')) {
+            el.setAttribute('data-mtb-tab-disp', el.style.display || '');
+        }
+        el.style.setProperty('display', 'none', 'important');
+        el.setAttribute('data-mtb-tab-hidden', '1');
+    }
+
+    function paintNativeTabsOnly() {
+        const row = nativeTabRow();
+        if (!row) return;
+        const type = depositType();
+        Array.from(row.children).forEach((el) => {
+            if (el.id === TAB_ID) return;
+            if (isNativeAutoEl(el)) el.className = type === '3' ? 'tab-active' : 'tab-nonactive';
+            else if (isNativeBankEl(el)) el.className = type === '1' ? 'tab-active' : 'tab-nonactive';
+        });
+    }
+
+    function applyNativeTabVisibility() {
+        const row = nativeTabRow();
+        if (!row) return;
+        const hideDup = healthIsOn() && isDepositMenu();
+        Array.from(row.children).forEach((el) => {
+            if (el.id === TAB_ID) return;
+            if (isNativeAutoEl(el) || isNativeBankEl(el)) {
+                restoreTabDisplay(el);
+                return;
+            }
+            if (isNativeQrisInstantEl(el)) {
+                if (hideDup) hideTabEl(el);
+                else restoreTabDisplay(el);
+            }
+        });
+    }
+
     function paintTabs() {
         if (!isDepositMenu()) return;
         const row = nativeTabRow();
         if (!row) return;
-        const ours = isOurTab();
+        const ours = isOurTab() && healthIsOn();
         const type = depositType();
         Array.from(row.children).forEach((el) => {
             if (el.id === TAB_ID) {
@@ -255,6 +353,7 @@
             if (isNativeAutoEl(el)) el.className = type === '3' ? 'tab-active' : 'tab-nonactive';
             else if (isNativeBankEl(el)) el.className = type === '1' ? 'tab-active' : 'tab-nonactive';
         });
+        applyNativeTabVisibility();
     }
 
     function setOurHashQuiet() {
@@ -263,15 +362,15 @@
         history.replaceState(null, '', url);
     }
 
-    function goOurTab() {
+    function goOurTab(opts) {
         try { sessionStorage.removeItem(NATIVE_AUTO_KEY); } catch (_) {}
         if (depositType() === '3') {
             setOurHashQuiet();
             paintTabs();
-            syncInjectPanel('tab').catch(() => {});
+            if (!(opts && opts.skipSync)) syncInjectPanel('tab').catch(() => {});
             return;
         }
-        window.location = '/user/deposit?type=3' + TAB_HASH;
+        window.location = depositBase() + '?type=3' + TAB_HASH;
     }
 
     function markNativeAuto() {
@@ -299,19 +398,19 @@
 
     function preferOurTabOnEntry() {
         if (PREVIEW) return true;
-        if (!isDepositMenu()) return false;
-        if (depositType() === '1') return false;
+        if (!isDepositMenu() || !healthIsOn()) return false;
         if (isOurTab()) return true;
+        if (depositType() === '1') return false;
         if (depositType() === '3' && consumeNativeAuto()) return false;
         if (depositType() === '3' || depositType() === '') {
-            goOurTab();
+            goOurTab({ skipSync: true });
             return true;
         }
         return false;
     }
 
     function ensureOurTab() {
-        if (!isDepositMenu()) return null;
+        if (!isDepositMenu() || !healthIsOn()) return null;
         const row = nativeTabRow();
         if (!row) return null;
         bindNativeTabClicks(row);
@@ -331,8 +430,15 @@
         return row;
     }
 
+    function purgeExtraWraps(keep) {
+        document.querySelectorAll('#' + PANEL_ID).forEach((el) => {
+            if (el !== keep) el.remove();
+        });
+    }
+
     function insertBelowTabs(wrap) {
         if (!wrap) return false;
+        purgeExtraWraps(wrap);
         const row = nativeTabRow();
         if (row && row.parentElement) {
             if (wrap.previousElementSibling === row) return true;
@@ -375,9 +481,22 @@
         return CFG.HEALTH_BASE + '/api/payment-health-v2';
     }
 
+    function healthIsOn() {
+        if (PREVIEW || CFG.SKIP_STORE_KEY) return true;
+        if (!CFG.STORE_KEY) return false;
+        return paymentHealthCache === true;
+    }
+
     async function checkPaymentHealth(forceRefresh) {
-        if (CFG.SKIP_STORE_KEY) return true;
+        if (CFG.SKIP_STORE_KEY) {
+            paymentHealthCache = true;
+            healthReady = true;
+            logHealthState(true);
+            return true;
+        }
         if (!CFG.STORE_KEY) {
+            paymentHealthCache = false;
+            healthReady = true;
             logHealthState(false);
             return false;
         }
@@ -388,6 +507,7 @@
             paymentHealthCacheKey === CFG.STORE_KEY &&
             (now - paymentHealthCacheAt) < PAYMENT_HEALTH_TTL
         ) {
+            healthReady = true;
             return paymentHealthCache;
         }
         try {
@@ -401,12 +521,14 @@
             paymentHealthCache = ok;
             paymentHealthCacheKey = CFG.STORE_KEY;
             paymentHealthCacheAt = now;
+            healthReady = true;
             logHealthState(ok);
             return ok;
         } catch (e) {
             paymentHealthCache = false;
             paymentHealthCacheKey = CFG.STORE_KEY;
             paymentHealthCacheAt = now;
+            healthReady = true;
             logHealthState(false);
             debugLog('health error', e);
             return false;
@@ -474,9 +596,10 @@
 #${PANEL_ID} .mtb-frame{min-height:400px;text-align:center}
 #${PANEL_ID} .mtb-ok{padding:16px;background:rgba(253,194,58,.16);border:2px solid var(--mtb-accent);border-radius:8px}
 @media (max-width:720px){
-  #${PANEL_ID} .mtb-card{padding:12px}
+  #${PANEL_ID}{margin:8px 0 12px;padding:0}
+  #${PANEL_ID} .mtb-card{padding:14px 12px;border-radius:10px}
   #${PANEL_ID} .mtb-title{font-size:15px}
-  #${PANEL_ID} .mtb-chip{min-width:30%;padding:10px 8px}
+  #${PANEL_ID} .mtb-chip{min-width:calc(50% - 8px);padding:10px 8px;font-size:13px}
   #${PANEL_ID} .mtb-submit{padding:16px}
 }`;
         document.head.appendChild(el);
@@ -562,18 +685,30 @@
         return n;
     }
 
+    function removeOurTab() {
+        const tab = document.getElementById(TAB_ID);
+        if (tab) tab.remove();
+    }
+
+    function clearOurHashQuiet() {
+        if (location.hash !== TAB_HASH) return;
+        history.replaceState(null, '', location.pathname + location.search);
+    }
+
     function teardownInject(reason) {
         const wrap = document.getElementById(PANEL_ID);
         if (wrap) wrap.remove();
         setNativeHidden(false);
         injectHandlersAttached = false;
-        if (!isDepositMenu()) {
-            const tab = document.getElementById(TAB_ID);
-            if (tab) tab.remove();
-        } else {
-            paintTabs();
-        }
         debugLog('teardown', reason || '');
+    }
+
+    function teardownHealthOff(reason) {
+        teardownInject(reason);
+        removeOurTab();
+        applyNativeTabVisibility();
+        paintNativeTabsOnly();
+        clearOurHashQuiet();
     }
 
     function ensureOnTop() {
@@ -775,13 +910,18 @@
         if (!isDepositQrisPage()) return false;
         const existing = document.getElementById(PANEL_ID);
         if (existing && !force) {
+            purgeExtraWraps(existing);
             ensureOnTop();
             setNativeHidden(true);
             return true;
         }
+        if (reinjectionInProgress && existing) {
+            purgeExtraWraps(existing);
+            return true;
+        }
         const username = await resolveUsername();
         injectCss();
-        if (existing) existing.remove();
+        document.querySelectorAll('#' + PANEL_ID).forEach((el) => el.remove());
         const wrap = document.createElement('div');
         wrap.id = PANEL_ID;
         wrap.setAttribute('data-mtb-ver', VERSION);
@@ -807,17 +947,23 @@
     }
 
     async function syncInjectPanel(reason) {
-        if (isDepositMenu()) ensureOurTab();
+        if (!isDepositMenu()) {
+            teardownHealthOff(reason || 'path-lock');
+            return;
+        }
+        const healthOk = await checkPaymentHealth(reason === 'poll' ? false : true);
+        if (!healthOk) {
+            teardownHealthOff(`payment-health OFF${reason ? ` (${reason})` : ''}`);
+            return;
+        }
+        ensureOurTab();
+        applyNativeTabVisibility();
         if (!isOurTab()) {
             teardownInject(reason || 'native-tab');
+            paintTabs();
             return;
         }
-        const healthOk = await checkPaymentHealth(true);
         const panel = document.getElementById(PANEL_ID);
-        if (!healthOk) {
-            if (panel) teardownInject(`payment-health OFF${reason ? ` (${reason})` : ''}`);
-            return;
-        }
         if (!panel && !reinjectionInProgress) {
             reinjectionInProgress = true;
             try {
@@ -845,15 +991,19 @@
         pathGuardStarted = true;
         const check = () => {
             if (!isDepositMenu()) {
-                teardownInject('path-lock');
+                teardownHealthOff('path-lock');
+                return;
+            }
+            if (!healthReady) return;
+            if (!healthIsOn()) {
+                teardownHealthOff('path-health-off');
                 return;
             }
             ensureOurTab();
-            if (!isOurTab()) {
-                teardownInject('native-tab');
-                return;
-            }
-            syncInjectPanel('path').catch(() => {});
+            applyNativeTabVisibility();
+            paintTabs();
+            if (isOurTab()) syncInjectPanel('path').catch(() => {});
+            else teardownInject('native-tab');
         };
         setInterval(check, 800);
         window.addEventListener('popstate', check);
@@ -863,41 +1013,38 @@
     async function boot(opts) {
         const rehook = opts?.rehook === true;
         if (!isDepositMenu()) {
-            teardownInject('bukan /user/deposit');
+            teardownHealthOff('bukan /user/deposit');
             return { ok: false, reason: 'path-lock' };
         }
         try { history.scrollRestoration = 'manual'; } catch (_) {}
         if (location.hash === TAB_HASH) {
             window.scrollTo(0, 0);
         }
-        ensureOurTab();
-        preferOurTabOnEntry();
-        if (!isOurTab()) {
-            teardownInject('native AUTO/BANK');
+        const healthOk = await checkPaymentHealth(true);
+        if (!healthOk) {
+            console.warn(LOG, 'health OFF — tab QRIS INSTANT + panel dilepas, AUTO/BANK native');
+            teardownHealthOff('boot health OFF');
             startHealthMonitor();
             startPathGuard();
-            console.log(LOG, 'boot tab-only', VERSION, 'AUTO/BANK native');
-            return { ok: true, version: VERSION, tab: true, injected: false };
+            return { ok: false, reason: 'health-off', version: VERSION, tab: false, injected: false };
         }
+        ensureOurTab();
+        applyNativeTabVisibility();
+        preferOurTabOnEntry();
         if (rehook) {
             injectHandlersAttached = false;
             const old = document.getElementById(PANEL_ID);
             if (old) old.remove();
         }
-        const healthOk = await checkPaymentHealth(true);
-        if (!healthOk) {
-            console.warn(LOG, 'health OFF — panel tidak tampil. Tambah ?store_key= di src martabak.js');
-            teardownInject('boot health OFF');
-            startHealthMonitor();
-            return { ok: false, reason: 'health-off', version: VERSION };
-        }
         const injected = await injectQrisPanel(rehook);
         startHealthMonitor();
+        startPathGuard();
         console.log(LOG, 'boot', {
             ok: !!injected,
             version: VERSION,
             user: readUsernameFromDom(),
             injected: !!document.getElementById(PANEL_ID),
+            tab: !!document.getElementById(TAB_ID),
             path: depositPath() + location.search,
         });
         return {
@@ -905,6 +1052,7 @@
             version: VERSION,
             user: readUsernameFromDom(),
             injected: !!document.getElementById(PANEL_ID),
+            tab: !!document.getElementById(TAB_ID),
             min: CFG.MIN_DEPO,
             path: depositPath() + location.search,
         };
@@ -917,6 +1065,8 @@
             user: readUsernameFromDom(),
             amount: readInjectAmount(),
             injected: !!document.getElementById(PANEL_ID),
+            tab: !!document.getElementById(TAB_ID),
+            health: healthIsOn(),
             lastRef: window.__MARTABAK_LAST_REFID__ || null,
             pathOk: isDepositQrisPage(),
         };
