@@ -1,7 +1,7 @@
 // ============================================================================
 // SPEED ENGINE QRIS POPPAY INJECTION
 // Adapted from ug_test_simple.js for speed.html / Sip69 deposit page
-// BOB RESEARCH LABS - speednewv2.js (v1.4.1 — anti double invoice / create-transaction)
+// BOB RESEARCH LABS - speednewv2.js (v1.4.2 — anti double invoice; guard baca invoice_id)
 // Deposit hanya via Poppay webhook — tidak POST /services/deposits
 // Target DOM: inject HANYA saat #deposit-qr-tab aktif (aria-selected)
 // Tab bank/va/ewallet/pulsa → teardown Poppay, form native balik
@@ -29,7 +29,7 @@
     }
     window.__SPEED_QRIS_INJECT_BOOTED__ = true;
 
-    console.log('🚀 [SPEED-QRIS] Starting speednewv2 v1.4.1 (anti double invoice)...');
+    console.log('🚀 [SPEED-QRIS] Starting speednewv2 v1.4.2 (anti double invoice)...');
 
     // Sniff X-Data-Reference dari native Speed fetch/XHR (wajib untuk players/identity API)
     let _speedXRefSniffed = '';
@@ -60,7 +60,8 @@
                 const parsed = typeof body === 'string'
                     ? JSON.parse(body)
                     : (body && typeof body === 'object' ? body : null);
-                return parsed && parsed.invoice ? String(parsed.invoice) : '';
+                const inv = parsed && (parsed.invoice || parsed.invoice_id);
+                return inv ? String(inv) : '';
             } catch (_) {
                 return '';
             }
