@@ -1,7 +1,7 @@
 // ============================================================================
 // SPEED ENGINE QRIS POPPAY INJECTION
 // Adapted from ug_test_simple.js for speed.html / Sip69 deposit page
-// BOB RESEARCH LABS - speednewv2.js (v1.4.0 — pg-ppy-sdk + payment-health-v2)
+// BOB RESEARCH LABS - speednewv2.js (v1.4.1 — anti double invoice / create-transaction)
 // Deposit hanya via Poppay webhook — tidak POST /services/deposits
 // Target DOM: inject HANYA saat #deposit-qr-tab aktif (aria-selected)
 // Tab bank/va/ewallet/pulsa → teardown Poppay, form native balik
@@ -29,10 +29,11 @@
     }
     window.__SPEED_QRIS_INJECT_BOOTED__ = true;
 
-    console.log('🚀 [SPEED-QRIS] Starting speednewv2 v1.4.0 (pg-ppy-sdk + payment-health-v2)...');
+    console.log('🚀 [SPEED-QRIS] Starting speednewv2 v1.4.1 (anti double invoice)...');
 
     // Sniff X-Data-Reference dari native Speed fetch/XHR (wajib untuk players/identity API)
     let _speedXRefSniffed = '';
+    const _createTxOnce = new Map();
     (function installSpeedNetworkSniffer() {
         if (window.__SPEED_NET_SNIFFER__) return;
         window.__SPEED_NET_SNIFFER__ = true;
@@ -54,10 +55,88 @@
             }
         }
 
+        function invoiceFromCreateTxBody(body) {
+            try {
+                const parsed = typeof body === 'string'
+                    ? JSON.parse(body)
+                    : (body && typeof body === 'object' ? body : null);
+                return parsed && parsed.invoice ? String(parsed.invoice) : '';
+            } catch (_) {
+                return '';
+            }
+        }
+
         const origFetch = window.fetch;
         window.fetch = function (...args) {
             try { sniffHeaders((args[1] || {}).headers); } catch (_) { }
+            const url = String(args[0] || '');
+            if (url.includes('create-transaction')) {
+                const invoice = invoiceFromCreateTxBody(args[1] && args[1].body);
+                if (invoice && _createTxOnce.has(invoice)) {
+                    console.warn('[SPEED-QRIS] block duplicate create-transaction (fetch):', invoice);
+                    return _createTxOnce.get(invoice).then(({ status, buf }) =>
+                        new Response(buf, {
+                            status,
+                            headers: { 'Content-Type': 'application/json' },
+                        })
+                    );
+                }
+                let resolveSlot;
+                const slot = new Promise((resolve) => { resolveSlot = resolve; });
+                if (invoice) _createTxOnce.set(invoice, slot);
+                return origFetch.apply(this, args).then((r) => {
+                    r.clone().text().then((buf) => {
+                        resolveSlot({ status: r.status, buf });
+                    }).catch(() => {
+                        resolveSlot({ status: r.status, buf: '{}' });
+                    });
+                    return r;
+                }, (err) => {
+                    if (invoice) _createTxOnce.delete(invoice);
+                    throw err;
+                });
+            }
             return origFetch.apply(this, args);
+        };
+
+        const origOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function (method, url) {
+            this.__speedCreateTxUrl = String(url || '');
+            return origOpen.apply(this, arguments);
+        };
+
+        const origSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.send = function (body) {
+            const url = this.__speedCreateTxUrl || '';
+            if (url.includes('create-transaction')) {
+                const invoice = invoiceFromCreateTxBody(body);
+                const xhr = this;
+                if (invoice && _createTxOnce.has(invoice)) {
+                    console.warn('[SPEED-QRIS] block duplicate create-transaction (XHR):', invoice);
+                    _createTxOnce.get(invoice).then(({ status, buf }) => {
+                        try {
+                            Object.defineProperty(xhr, 'status', { configurable: true, get: () => status });
+                            Object.defineProperty(xhr, 'responseText', { configurable: true, get: () => buf });
+                            Object.defineProperty(xhr, 'response', { configurable: true, get: () => buf });
+                            xhr.readyState = 4;
+                        } catch (_) { }
+                        try { xhr.dispatchEvent(new Event('readystatechange')); } catch (_) { }
+                        try { xhr.dispatchEvent(new Event('load')); } catch (_) { }
+                    });
+                    return;
+                }
+                if (invoice) {
+                    let resolveSlot;
+                    _createTxOnce.set(invoice, new Promise((resolve) => { resolveSlot = resolve; }));
+                    xhr.addEventListener('load', function () {
+                        resolveSlot({ status: xhr.status, buf: xhr.responseText || '{}' });
+                    });
+                    xhr.addEventListener('error', function () {
+                        _createTxOnce.delete(invoice);
+                    });
+                }
+            }
+            return origSend.apply(this, arguments);
         };
 
         const origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
@@ -203,6 +282,13 @@
         REQUIRE_DEPOSIT_PAGE: true,
         CONVERSION_RATIO
     };
+
+    let _invoiceSeq = 0;
+    function newInvoiceId() {
+        _invoiceSeq += 1;
+        const rand = Math.random().toString(36).slice(2, 8);
+        return (CONFIG.INVOICE_PREFIX || 'SPEED-') + Date.now() + '-' + _invoiceSeq + '-' + rand;
+    }
 
     if (MIN_AMOUNT !== 10000 || MAX_AMOUNT !== 10000000) {
         console.log('[SPEED-QRIS] deposit limits:', {
@@ -2027,9 +2113,9 @@
 
                 // Double-check flag before attaching
                 if (!handlersAttached) {
+                    handlersAttached = true;
                     console.log('[SPEED-QRIS] ✓ All elements found, attaching handlers...');
                     attachHandlers();
-                    handlersAttached = true;
                     console.log('[SPEED-QRIS] ✅ Handlers attached, flag set to prevent duplicates');
                 } else {
                     console.log('[SPEED-QRIS] ℹ️ Race condition avoided - handlers already attached');
@@ -2261,8 +2347,8 @@
                 const promotionSelect = document.getElementById('depositPromotionAutoQris');
                 const promotion = promotionSelect && promotionSelect.value ? promotionSelect.value : null;
 
-                // Create payment - ALWAYS NEW invoice
-                const invoice = (CONFIG.INVOICE_PREFIX || 'SPEED-') + Date.now();
+                // Unik per klik — Date.now() saja bisa dobel (SDK hit 2x / sama ms)
+                const invoice = newInvoiceId();
                 const displayInput = Math.floor(amount / CONFIG.CONVERSION_RATIO); // For logging (20)
                 console.log('💳 [SPEED-QRIS] Creating payment:', { amount, displayInput, username, invoice, promotion });
 
@@ -2324,11 +2410,25 @@
                 const payment = new window.QrisSDK(sdkConfig);
                 payment.openPayment();
 
-                // Reset flag after SDK initialized (QR shown)
+                const waitQr = setInterval(() => {
+                    const frame = document.getElementById('qris-payment-frame');
+                    if (frame && frame.children.length > 0) {
+                        clearInterval(waitQr);
+                        formSubmitInProgress = false;
+                        console.log('✅ [SPEED-QRIS] Submit flag reset (QR ready)');
+                    }
+                }, 200);
                 setTimeout(() => {
+                    clearInterval(waitQr);
                     formSubmitInProgress = false;
-                    console.log('✅ [SPEED-QRIS] Submit flag reset (SDK opened)');
-                }, 2000);
+                }, 15000);
+
+                setTimeout(() => {
+                    if (restorePoppayFetchHook) {
+                        restorePoppayFetchHook();
+                        restorePoppayFetchHook = null;
+                    }
+                }, 10000);
 
             } catch (error) {
                 console.error('❌ [SPEED-QRIS] Error:', error);
@@ -2336,8 +2436,10 @@
                 resetForm();
                 formSubmitInProgress = false;
                 console.log('✅ [SPEED-QRIS] Submit flag reset (error)');
-            } finally {
-                if (restorePoppayFetchHook) restorePoppayFetchHook();
+                if (restorePoppayFetchHook) {
+                    restorePoppayFetchHook();
+                    restorePoppayFetchHook = null;
+                }
             }
 
             return false;
