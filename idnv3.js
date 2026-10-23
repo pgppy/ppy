@@ -9,7 +9,7 @@
     'use strict';
 
     const LOG = '[IDN-QRIS]';
-    const VERSION = '0.6.5';
+    const VERSION = '0.6.6';
     const PANEL_TITLE = 'DEPOSIT QRIS (INSTANT AUTO)';
     const SDK_URL = 'https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
 
@@ -245,13 +245,6 @@
     let scrollGuardUntil = 0;
     let scrollUserMoved = false;
 
-    function isMobileViewport() {
-        try {
-            if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) return true;
-        } catch (_) {}
-        return /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent || '');
-    }
-
     /** Fokus kolom Jumlah form inject. Popup APK situs nutup field itu. */
     function dismissBlockingModal() {
         const modal = document.getElementById('poker-apps');
@@ -286,11 +279,42 @@
         if (native && document.activeElement === native) native.blur();
     }
 
+    function scrollInjectIntoView() {
+        const el = document.getElementById('idn-qris-inject-wrap');
+        if (!el) return;
+        let pad = 8;
+        document.querySelectorAll('header, .header, .navbar, .navbar-header, .header-mobile').forEach((n) => {
+            const s = getComputedStyle(n);
+            if (s.position !== 'fixed' && s.position !== 'sticky') return;
+            const r = n.getBoundingClientRect();
+            if (r.height > 0 && r.top < 90) pad = Math.max(pad, r.height + 8);
+        });
+        const y = el.getBoundingClientRect().top + (window.pageYOffset || document.documentElement.scrollTop || 0) - pad;
+        window.scrollTo(0, Math.max(0, y));
+        let node = el.parentElement;
+        while (node && node !== document.documentElement) {
+            const s = getComputedStyle(node);
+            if (/(auto|scroll)/.test(s.overflowY) && node.scrollHeight > node.clientHeight + 8) {
+                const top = el.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop - pad;
+                node.scrollTop = Math.max(0, top);
+            }
+            node = node.parentElement;
+        }
+    }
+
+    function injectIsInView() {
+        const el = document.getElementById('idn-qris-inject-wrap');
+        if (!el) return false;
+        const top = el.getBoundingClientRect().top;
+        return top >= -12 && top < 140;
+    }
+
     function armScrollToInject() {
-        if (!isMobileViewport() || scrollUserMoved) return;
+        if (scrollUserMoved) return;
         if (!document.getElementById('idnDepositInput')) return;
-        scrollGuardUntil = Date.now() + 3500;
+        scrollGuardUntil = Date.now() + 4500;
         releaseNativeAmountFocus();
+        scrollInjectIntoView();
         focusInjectAmount();
     }
 
@@ -299,20 +323,24 @@
         window.__IDN_QRIS_SCROLL_GUARD__ = true;
         document.addEventListener('pointerdown', (e) => {
             const t = e.target;
-            if (!(t instanceof Element) || !t.closest('#idn-qris-inject-wrap')) {
-                scrollUserMoved = true;
-            }
+            if (!(t instanceof Element)) return;
+            const link = t.closest('a');
+            const href = link ? (link.getAttribute('href') || '') : '';
+            if (/\/deposit/i.test(href) && !/\/history/i.test(href)) return;
+            if (!t.closest('#idn-qris-inject-wrap')) scrollUserMoved = true;
         }, true);
         document.addEventListener('focusin', (e) => {
             if (scrollUserMoved || Date.now() > scrollGuardUntil) return;
             if (e.target && e.target.id === 'inputJumlah') {
                 e.target.blur();
+                scrollInjectIntoView();
                 focusInjectAmount();
             }
         }, true);
         setInterval(() => {
             if (scrollUserMoved || Date.now() > scrollGuardUntil) return;
             if (!document.getElementById('idnDepositInput')) return;
+            if (!injectIsInView()) scrollInjectIntoView();
             if (document.activeElement && document.activeElement.id === 'idnDepositInput') return;
             releaseNativeAmountFocus();
             focusInjectAmount();
@@ -909,6 +937,7 @@
                 teardownInject('leave-deposit');
                 return;
             }
+            scrollUserMoved = false;
             observeWrapper();
             syncInjectPanel('tab').catch(() => {});
         };
@@ -918,6 +947,7 @@
             if (!a) return;
             const href = a.getAttribute('href') || '';
             if (!/\/deposit|\/withdraw|\/history/i.test(href)) return;
+            if (/\/deposit/i.test(href) && !/\/history/i.test(href)) scrollUserMoved = false;
             setTimeout(rehookNav, 80);
             setTimeout(rehookNav, 700);
         }, true);
