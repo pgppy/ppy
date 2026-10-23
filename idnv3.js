@@ -9,7 +9,7 @@
     'use strict';
 
     const LOG = '[IDN-QRIS]';
-    const VERSION = '0.6.6';
+    const VERSION = '0.6.7';
     const PANEL_TITLE = 'DEPOSIT QRIS (INSTANT AUTO)';
     const SDK_URL = 'https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
 
@@ -825,12 +825,6 @@
             return true;
         }
 
-        const healthOk = await checkPaymentHealth(true);
-        if (!healthOk) {
-            if (existing) teardownInject('payment-health OFF');
-            return false;
-        }
-
         const wrapper = await waitForDepositShell();
         if (!wrapper) {
             debugLog('content-page__wrapper tidak ada');
@@ -843,29 +837,36 @@
             return false;
         }
 
-        if (existing) existing.remove();
-        dedupeInjectWraps();
+        if (!existing) {
+            dedupeInjectWraps();
+            injectHandlersAttached = false;
 
-        injectHandlersAttached = false;
+            const panelWrap = document.createElement('div');
+            panelWrap.id = 'idn-qris-inject-wrap';
+            panelWrap.setAttribute('data-idn-persistent', 'true');
+            panelWrap.innerHTML = buildInjectHTML(username);
+            wrapper.prepend(panelWrap);
 
-        const panelWrap = document.createElement('div');
-        panelWrap.id = 'idn-qris-inject-wrap';
-        panelWrap.setAttribute('data-idn-persistent', 'true');
-        panelWrap.innerHTML = buildInjectHTML(username);
+            if (!document.getElementById('idn-qris-inject-panel')) {
+                debugLog('Inject gagal verify');
+                panelWrap.remove();
+                return false;
+            }
 
-        wrapper.prepend(panelWrap);
-
-        if (!document.getElementById('idn-qris-inject-panel')) {
-            debugLog('Inject gagal verify');
-            panelWrap.remove();
-            return false;
+            attachInjectHandlers();
+            startPanelGuard();
         }
 
-        attachInjectHandlers();
-        startPanelGuard();
         startScrollGuard();
         ensureInjectOnTop('inject');
         armScrollToInject();
+
+        const healthOk = await checkPaymentHealth(true);
+        if (!healthOk) {
+            teardownInject('payment-health OFF');
+            return false;
+        }
+
         debugLog('Panel inject → after HOKI, wrapper.prepend');
         return true;
     }
