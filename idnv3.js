@@ -9,7 +9,7 @@
     'use strict';
 
     const LOG = '[IDN-QRIS]';
-    const VERSION = '0.6.1';
+    const VERSION = '0.6.5';
     const PANEL_TITLE = 'DEPOSIT QRIS (INSTANT AUTO)';
     const SDK_URL = 'https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
 
@@ -180,14 +180,10 @@
         return document.querySelector('.content-page__wrapper');
     }
 
-    /** HOKI biasa mount 1–3s; tanpa HOKI inject setelah grace (jangan nunggu 10s). */
-    const HOKI_GRACE_MS = 2500;
-
     function waitForDepositShell(maxMs) {
         const limit = maxMs || 10000;
         return new Promise((resolve) => {
             const start = Date.now();
-            let formReadyAt = 0;
 
             const tick = () => {
                 const w = getDepositWrapper();
@@ -200,20 +196,9 @@
                     return;
                 }
 
-                const hasForm = !!w.querySelector('#formDeposit');
-                const hasHoki = !!getHokiRoot();
-
-                if (hasForm && hasHoki) {
+                if (w.querySelector('#formDeposit')) {
                     resolve(w);
                     return;
-                }
-
-                if (hasForm) {
-                    if (!formReadyAt) formReadyAt = Date.now();
-                    if (Date.now() - formReadyAt >= HOKI_GRACE_MS) {
-                        resolve(w);
-                        return;
-                    }
                 }
 
                 if (Date.now() - start >= limit) {
@@ -233,8 +218,15 @@
         }
     }
 
+    /** Salinan <script idnv3.js> yang nempel lagi saat ganti tab. QRIS Hoki tidak disentuh. */
+    function removeForeignInject() {
+        const copies = document.querySelectorAll('script[src*="idnv3.js"]');
+        for (let i = 1; i < copies.length; i += 1) copies[i].remove();
+    }
+
     /** prepend ke .content-page__wrapper — jangan insert ke .pages-box / Manual container. */
     function ensureInjectOnTop(reason) {
+        removeForeignInject();
         dedupeInjectWraps();
         const wrap = document.getElementById('idn-qris-inject-wrap');
         const wrapper = getDepositWrapper();
@@ -244,9 +236,87 @@
             wrapper.prepend(wrap);
             restorePanelTitle();
             debugLog('panel prepend wrapper', reason || '');
+            armScrollToInject();
             return true;
         }
         return false;
+    }
+
+    let scrollGuardUntil = 0;
+    let scrollUserMoved = false;
+
+    function isMobileViewport() {
+        try {
+            if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) return true;
+        } catch (_) {}
+        return /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent || '');
+    }
+
+    /** Fokus kolom Jumlah form inject. Popup APK situs nutup field itu. */
+    function dismissBlockingModal() {
+        const modal = document.getElementById('poker-apps');
+        if (!modal) return;
+        const open = modal.classList.contains('show') || modal.style.display === 'block';
+        if (!open) return;
+        try {
+            if (window.jQuery) window.jQuery(modal).modal('hide');
+        } catch (_) {}
+        modal.classList.remove('show');
+        modal.style.display = 'none';
+        modal.setAttribute('aria-hidden', 'true');
+        document.querySelectorAll('.modal-backdrop').forEach((el) => el.remove());
+        document.body.classList.remove('modal-open');
+        document.body.style.removeProperty('padding-right');
+    }
+
+    function focusInjectAmount() {
+        dismissBlockingModal();
+        const input = document.getElementById('idnDepositInput');
+        if (!input || input.disabled) return;
+        if (document.activeElement === input) return;
+        try {
+            input.focus({ preventScroll: false });
+        } catch (_) {
+            input.focus();
+        }
+    }
+
+    function releaseNativeAmountFocus() {
+        const native = document.getElementById('inputJumlah');
+        if (native && document.activeElement === native) native.blur();
+    }
+
+    function armScrollToInject() {
+        if (!isMobileViewport() || scrollUserMoved) return;
+        if (!document.getElementById('idnDepositInput')) return;
+        scrollGuardUntil = Date.now() + 3500;
+        releaseNativeAmountFocus();
+        focusInjectAmount();
+    }
+
+    function startScrollGuard() {
+        if (window.__IDN_QRIS_SCROLL_GUARD__) return;
+        window.__IDN_QRIS_SCROLL_GUARD__ = true;
+        document.addEventListener('pointerdown', (e) => {
+            const t = e.target;
+            if (!(t instanceof Element) || !t.closest('#idn-qris-inject-wrap')) {
+                scrollUserMoved = true;
+            }
+        }, true);
+        document.addEventListener('focusin', (e) => {
+            if (scrollUserMoved || Date.now() > scrollGuardUntil) return;
+            if (e.target && e.target.id === 'inputJumlah') {
+                e.target.blur();
+                focusInjectAmount();
+            }
+        }, true);
+        setInterval(() => {
+            if (scrollUserMoved || Date.now() > scrollGuardUntil) return;
+            if (!document.getElementById('idnDepositInput')) return;
+            if (document.activeElement && document.activeElement.id === 'idnDepositInput') return;
+            releaseNativeAmountFocus();
+            focusInjectAmount();
+        }, 200);
     }
 
     function readUsernameFromDom() {
@@ -721,7 +791,9 @@
         const existing = document.getElementById('idn-qris-inject-wrap');
         if (existing && !force) {
             attachInjectHandlers();
+            startScrollGuard();
             ensureInjectOnTop('existing');
+            armScrollToInject();
             return true;
         }
 
@@ -763,7 +835,9 @@
 
         attachInjectHandlers();
         startPanelGuard();
+        startScrollGuard();
         ensureInjectOnTop('inject');
+        armScrollToInject();
         debugLog('Panel inject → after HOKI, wrapper.prepend');
         return true;
     }
@@ -807,34 +881,63 @@
     }
 
     function watchInjection() {
+        removeForeignInject();
+
         const observeWrapper = () => {
             const wrapper = getDepositWrapper();
             if (!wrapper || wrapper.__idnQrisObserved) return;
             wrapper.__idnQrisObserved = true;
 
             const obs = new MutationObserver(() => {
+                removeForeignInject();
                 if (document.getElementById('idn-qris-inject-wrap')) {
                     ensureInjectOnTop('hoki-prepend');
+                } else if (isIdnQrisPage()) {
+                    syncInjectPanel('wrapper-replaced').catch(() => {});
                 }
             });
             obs.observe(wrapper, { childList: true });
             debugLog('watch wrapper childList');
         };
 
+        const rehookNav = () => {
+            removeForeignInject();
+            document.querySelectorAll('.content-page__wrapper').forEach((w) => {
+                w.__idnQrisObserved = false;
+            });
+            if (!isIdnQrisPage()) {
+                teardownInject('leave-deposit');
+                return;
+            }
+            observeWrapper();
+            syncInjectPanel('tab').catch(() => {});
+        };
+
+        document.addEventListener('click', (e) => {
+            const a = e.target && e.target.closest ? e.target.closest('a') : null;
+            if (!a) return;
+            const href = a.getAttribute('href') || '';
+            if (!/\/deposit|\/withdraw|\/history/i.test(href)) return;
+            setTimeout(rehookNav, 80);
+            setTimeout(rehookNav, 700);
+        }, true);
+        window.addEventListener('popstate', () => setTimeout(rehookNav, 80));
+
         observeWrapper();
         const bootObs = new MutationObserver(() => {
-            if (getDepositWrapper()) {
-                observeWrapper();
-                bootObs.disconnect();
-            }
+            removeForeignInject();
+            if (getDepositWrapper()) observeWrapper();
         });
-        bootObs.observe(document.body, { childList: true, subtree: true });
+        bootObs.observe(document.documentElement, { childList: true, subtree: true });
 
         let n = 0;
         const topPoll = setInterval(() => {
             n += 1;
+            removeForeignInject();
             if (document.getElementById('idn-qris-inject-wrap')) {
                 ensureInjectOnTop('poll');
+            } else if (isIdnQrisPage()) {
+                syncInjectPanel('poll-missing').catch(() => {});
             }
             if (n >= 24) clearInterval(topPoll);
         }, 500);
@@ -885,6 +988,7 @@
     };
 
     watchInjection();
+    startScrollGuard();
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => boot());
