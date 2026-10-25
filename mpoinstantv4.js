@@ -218,6 +218,67 @@ window.__PG_SELF_SCRIPT_SRC =
   };
 })();
 
+function parseAmountDigits(n) {
+  const v = parseInt(String(n == null ? '' : n).replace(/[^\d]/g, ''), 10);
+  return Number.isFinite(v) ? v : 0;
+}
+
+/** 45000 lolos. 45969 tidak, karena bukan kelipatan 1000. */
+function isWholeThousand(n) {
+  const v = parseAmountDigits(n);
+  return v > 0 && v % 1000 === 0;
+}
+
+/** 45969 → 45000. Di bawah 1000 jadi 0. */
+function floorThousand(n) {
+  const v = parseAmountDigits(n);
+  if (v < 1000) return 0;
+  return Math.floor(v / 1000) * 1000;
+}
+
+function formatGroupedAmount(n) {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/** Baca kolom tampilan dan nilai tersembunyi. Salah satu masih ada angka belakang → tidak boleh dibayar. */
+function readPayableAmount() {
+  const show = document.getElementById('depositShowAmountAutoQris');
+  const hidden = document.getElementById('depositAmountAutoQris');
+  const shown = parseAmountDigits(show && show.value);
+  const stored = parseAmountDigits(hidden && hidden.value);
+  const shownBad = shown > 0 && !isWholeThousand(shown);
+  const storedBad = stored > 0 && !isWholeThousand(stored);
+  const mismatch = shown > 0 && stored > 0 && shown !== stored;
+  if (shownBad || storedBad || mismatch) {
+    const source = shownBad ? shown : (storedBad ? stored : (shown || stored));
+    return { pass: false, amount: floorThousand(source), shown, stored };
+  }
+  const amount = stored || shown;
+  if (!isWholeThousand(amount)) {
+    return { pass: false, amount: floorThousand(amount), shown, stored };
+  }
+  return { pass: true, amount, shown, stored };
+}
+
+function applyRoundedAmount(rounded) {
+  const hidden = document.getElementById('depositAmountAutoQris');
+  const show = document.getElementById('depositShowAmountAutoQris');
+  if (!(rounded > 0)) return;
+  if (hidden) hidden.value = String(rounded);
+  else if (show) show.value = formatGroupedAmount(rounded);
+}
+
+function formatRp(n) {
+  return 'Rp ' + Number(n).toLocaleString('id-ID');
+}
+
+function wholeThousandMessage(rounded) {
+  if (rounded > 0) {
+    return 'Jumlah harus kelipatan Rp 1.000. Dibulatkan menjadi ' + formatRp(rounded);
+  }
+  return 'Jumlah harus kelipatan Rp 1.000. Contoh: Rp 45.000';
+}
+
 // Get username from page
 async function getUsername() {
   try {
@@ -345,22 +406,31 @@ class QrisSDKCustom {
       const $depoBtn = $depoForm.find('button[type="submit"], input[type="submit"]');
       $depoBtn.prop("disabled", true);
 
-      const amountValue = parseFloat(this.amountInput.value);
-      
-      const minDepo = Number(window.__PG_MIN_DEPO) > 0 ? Number(window.__PG_MIN_DEPO) : 10000;
-      const maxDepo = Number(window.__PG_MAX_DEPO) > 0 ? Number(window.__PG_MAX_DEPO) : 10000000;
-      const rpLabel = (n) => 'Rp ' + Number(n).toLocaleString('id-ID');
+      const showAmount = document.getElementById('depositShowAmountAutoQris');
+      const gate = readPayableAmount();
+      const needsRound = !gate.pass || (showAmount && showAmount.dataset.justRounded === '1');
 
-      if (!amountValue || amountValue < minDepo) {
-        alert('Jumlah deposit minimal ' + rpLabel(minDepo));
-        console.log('[QRIS SDK] ❌ Amount validation failed:', amountValue);
+      if (needsRound) {
+        const rounded = gate.amount;
+        if (rounded > 0) applyRoundedAmount(rounded);
+        if (showAmount) showAmount.dataset.justRounded = '';
+        const msg = wholeThousandMessage(rounded);
+        alert(msg);
+        console.log('[QRIS SDK] ❌ Amount dibulatkan ke ribuan:', rounded);
+        if (typeof window.__mpoShowAmountError === 'function') {
+          window.__mpoShowAmountError(msg);
+        }
         $depoForm.data("depositSubmitting", false);
         $depoBtn.prop("disabled", false);
         return false;
       }
-      if (amountValue > maxDepo) {
-        alert('Jumlah deposit maksimal ' + rpLabel(maxDepo));
-        console.log('[QRIS SDK] ❌ Amount above max:', amountValue);
+
+      let amountValue = gate.amount;
+
+      // Validate amount
+      if (!amountValue || amountValue < 10000) {
+        alert('Jumlah deposit minimal Rp 10.000');
+        console.log('[QRIS SDK] ❌ Amount validation failed:', amountValue);
         $depoForm.data("depositSubmitting", false);
         $depoBtn.prop("disabled", false);
         return false;
@@ -392,6 +462,21 @@ class QrisSDKCustom {
       }
 
       console.log('[QRIS SDK] ✅ Processing payment:', { amount: amountValue, username, invoice: randomRefId });
+
+      const finalGate = readPayableAmount();
+      if (!finalGate.pass || !isWholeThousand(finalGate.amount) || finalGate.amount !== amountValue) {
+        if (finalGate.amount > 0) applyRoundedAmount(finalGate.amount);
+        const msg = wholeThousandMessage(finalGate.amount);
+        alert(msg);
+        console.log('[QRIS SDK] ❌ Angka belakang tertahan sebelum QR:', finalGate);
+        if (typeof window.__mpoShowAmountError === 'function') {
+          window.__mpoShowAmountError(msg);
+        }
+        $depoForm.data("depositSubmitting", false);
+        $depoBtn.prop("disabled", false);
+        return false;
+      }
+      amountValue = finalGate.amount;
       
       // Hide form, show result container
       if (this.formContainer) this.formContainer.style.display = 'none';
@@ -417,6 +502,14 @@ class QrisSDKCustom {
   }
 
     openPayment(amount, invoice, channel, username) {
+    const charged = floorThousand(amount);
+    if (!isWholeThousand(charged) || charged !== parseAmountDigits(amount)) {
+      console.error('[QRIS AUTO] blocked trailing digits', amount);
+      alert(wholeThousandMessage(charged));
+      this.resetForm();
+      return;
+    }
+    amount = charged;
     console.log('[QRIS AUTO] Generating QR with inline mode:', { amount, username, invoice });
 
     const storeKey = (
@@ -486,7 +579,7 @@ class QrisSDKCustom {
 }
 
 $(document).ready(async function () {
-console.log('[INJECT SCRIPT] Version 5.8 - min_depo/max_depo + amount buttons');
+console.log('[INJECT SCRIPT] Version 5.11 - angka belakang tidak bisa lolos ke QR');
 
 // ===================================================================
 // URL CHECK - Only inject on transaction/deposit page
@@ -513,7 +606,7 @@ console.log('[INJECT] ✅ On deposit/transaction page, proceeding with injection
   // PGScript gate — store_key + payment-health-v2 (fail-closed)
   // SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
   // Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
-  // Embed: <script src="...mpoinstantv4.js?store_key=sk_...&min_depo=20000&max_depo=10000000">
+  // Embed: <script src="...mpoinstantv4.js?store_key=sk_...">
   // ===================================================================
   let paymentHealthCache = null;
   let paymentHealthCacheKey = '';
@@ -556,27 +649,6 @@ console.log('[INJECT] ✅ On deposit/transaction page, proceeding with injection
   ).trim();
 
   window.__PG_STORE_KEY = STORE_KEY;
-
-  function parseDepositLimit(raw, fallback) {
-    const n = parseInt(String(raw == null ? '' : raw).replace(/[^\d]/g, ''), 10);
-    return Number.isFinite(n) && n > 0 ? n : fallback;
-  }
-
-  function formatRp(n) {
-    return 'Rp ' + Number(n).toLocaleString('id-ID');
-  }
-
-  const MIN_DEPO = parseDepositLimit(
-    getParamFromCurrentScript('min_depo') || getParamFromCurrentScript('min_deposit'),
-    10000
-  );
-  const MAX_DEPO = parseDepositLimit(
-    getParamFromCurrentScript('max_depo') || getParamFromCurrentScript('max_deposit'),
-    10000000
-  );
-  window.__PG_MIN_DEPO = MIN_DEPO;
-  window.__PG_MAX_DEPO = MAX_DEPO;
-  console.log('[INJECT] deposit limits min=' + MIN_DEPO + ' max=' + MAX_DEPO);
 
   const QRIS_SDK_URL = (
     getParamFromCurrentScript('sdk_url') ||
@@ -748,6 +820,36 @@ function loadExternalScript(url) {
       const cleanVal = cleanNumber(val);
       descriptor.set.call(hiddenInput, cleanVal > 0 ? cleanVal.toString() : '');
     });
+
+    function showAmountError(message) {
+      const box = document.getElementById('qrisAmountError');
+      if (box) {
+        box.textContent = message || '';
+        box.style.display = message ? 'block' : 'none';
+      }
+      showInput.style.borderColor = message ? '#ff4d4f' : '';
+    }
+
+    window.__mpoShowAmountError = showAmountError;
+
+    $(showInput).on('input', function () {
+      showInput.dataset.justRounded = '';
+      showAmountError('');
+    });
+
+    $(showInput).on('blur', function () {
+      const amount = parseAmountDigits(this.value);
+      if (amount > 0 && !isWholeThousand(amount)) {
+        const rounded = floorThousand(amount);
+        if (rounded > 0) {
+          this.value = formatGroupedAmount(rounded);
+        }
+        showInput.dataset.justRounded = '1';
+        showAmountError(wholeThousandMessage(rounded));
+        return;
+      }
+      showAmountError('');
+    });
   }
 
   // Load external SDKs
@@ -795,8 +897,17 @@ function loadExternalScript(url) {
       $('.qris-amount-btn').removeClass('active');
       $(this).addClass('active');
       
-      const amount = parseInt($(this).data('amount')) || 0;
-      const validAmount = Math.max(0, amount);
+      const amount = floorThousand($(this).data('amount'));
+      const showAmount = document.getElementById('depositShowAmountAutoQris');
+      if (!isWholeThousand(amount)) {
+        if (typeof window.__mpoShowAmountError === 'function') {
+          window.__mpoShowAmountError(wholeThousandMessage(amount));
+        }
+        return;
+      }
+      if (showAmount) showAmount.dataset.justRounded = '';
+      if (typeof window.__mpoShowAmountError === 'function') window.__mpoShowAmountError('');
+      const validAmount = amount;
       
       // Format with comma for display
       const formattedAmount = validAmount.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -821,17 +932,6 @@ function loadExternalScript(url) {
     });
   }
 
-  function amountButtonsHtml() {
-    const presets = [10000, 20000, 50000, 100000, 500000];
-    const amounts = [...new Set([MIN_DEPO, ...presets])]
-      .filter((n) => n >= MIN_DEPO && n <= MAX_DEPO)
-      .sort((a, b) => a - b);
-    if (!amounts.length) amounts.push(MIN_DEPO);
-    return amounts.map((n) =>
-      '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="' + n + '">' + formatRp(n) + '<' + '/button>'
-    ).join('');
-  }
-
   // Define QRIS HTML Template (used globally)
   const qrisHTML = '<' + 'div class="qris-manual-wrapper" style="background: #1a1a1a; padding: 25px; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">' +
     '<' + 'div class="qris-manual-header" style="margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid #f0f0f0;">' +
@@ -847,7 +947,11 @@ function loadExternalScript(url) {
     '<' + 'div class="form-group mb-3">' +
     '<' + 'label style="color: #fff; font-weight: 500; margin-bottom: 8px; display: block;">Jumlah Deposit</' + 'label>' +
     '<' + 'div class="d-flex flex-wrap gap-2 mb-3" style="gap: 10px;">' +
-    amountButtonsHtml() +
+    '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="10000">Rp 10.000<' + '/button>' +
+    '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="20000">Rp 20.000<' + '/button>' +
+    '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="50000">Rp 50.000<' + '/button>' +
+    '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="100000">Rp 100.000<' + '/button>' +
+    '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="500000">Rp 500.000<' + '/button>' +
     '<' + '/div>' +
     '<' + 'div class="input-group">' +
     '<' + 'div class="input-group-prepend">' +
@@ -856,7 +960,8 @@ function loadExternalScript(url) {
     '<' + 'input class="form-control" type="text" id="depositShowAmountAutoQris" placeholder="Atau masukkan jumlah manual" oninput="this.value=this.value.replace(/[^0-9]/g,\'\');let n=parseInt(this.value)||0;this.value=Math.max(0,n).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g,\',\');" onkeydown="if(event.key===\'-\'||event.keyCode===189||event.keyCode===109)event.preventDefault();">' +
     '<' + 'input name="amountAuto" id="depositAmountAutoQris" type="hidden" value="">' +
     '<' + '/div>' +
-    '<' + 'small class="form-text text-muted" id="qrisDepositLimit">Min: ' + formatRp(MIN_DEPO) + ' | Max: ' + formatRp(MAX_DEPO) + '<' + '/small>' +
+    '<' + 'small class="form-text text-muted">Min: Rp 10.000 | Max: Rp 10.000.000<' + '/small>' +
+    '<' + 'small id="qrisAmountError" class="form-text" style="display:none; color:#ff4d4f; font-weight:600;"><' + '/small>' +
     '<' + '/div>' +
     '<' + 'button name="deposit" type="submit" class="btn btn-success btn-block" style="padding: 12px; font-weight: 600;">' +
     '<' + 'i class="fas fa-qrcode"><' + '/i> Generate QR Code' +
