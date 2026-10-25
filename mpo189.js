@@ -279,6 +279,46 @@ function wholeThousandMessage(rounded) {
   return 'Jumlah harus kelipatan Rp 1.000. Contoh: Rp 45.000';
 }
 
+// Script URL params (?min_depo= &max_depo=) — default min 10.000, max 10.000.000
+function getDepositLimitParam(name) {
+  try {
+    const src = window.__PG_SELF_SCRIPT_SRC ||
+      Array.from(document.querySelectorAll('script[src]'))
+        .map((s) => s.src)
+        .reverse()
+        .find((url) => {
+          try {
+            return !!new URL(url, window.location.href).searchParams.get('store_key');
+          } catch (e) {
+            return false;
+          }
+        });
+    if (!src) return null;
+    return new URL(src, window.location.href).searchParams.get(name);
+  } catch (e) {
+    return null;
+  }
+}
+
+function resolveDepositLimit(paramNames, windowKey, defaultValue) {
+  for (const name of paramNames) {
+    const fromUrl = parseAmountDigits(getDepositLimitParam(name));
+    if (fromUrl > 0) return fromUrl;
+  }
+  const fromWin = parseAmountDigits(window[windowKey]);
+  if (fromWin > 0) return fromWin;
+  return defaultValue;
+}
+
+const MIN_DEPO = Math.ceil(
+  resolveDepositLimit(['min_depo', 'min_deposit', 'min_amount'], 'PGSCRIPT_MIN_DEPO', 10000) / 1000
+) * 1000;
+const MAX_DEPO = Math.max(
+  MIN_DEPO,
+  floorThousand(resolveDepositLimit(['max_depo', 'max_deposit', 'max_amount'], 'PGSCRIPT_MAX_DEPO', 10000000))
+);
+console.log('[QRIS] deposit limits:', { min: MIN_DEPO, max: MAX_DEPO });
+
 // Get username from page
 async function getUsername() {
   try {
@@ -428,9 +468,16 @@ class QrisSDKCustom {
       let amountValue = gate.amount;
 
       // Validate amount
-      if (!amountValue || amountValue < 10000) {
-        alert('Jumlah deposit minimal Rp 10.000');
-        console.log('[QRIS SDK] ❌ Amount validation failed:', amountValue);
+      if (!amountValue || amountValue < MIN_DEPO) {
+        alert('Jumlah deposit minimal ' + formatRp(MIN_DEPO));
+        console.log('[QRIS SDK] ❌ Amount below min_depo:', amountValue, MIN_DEPO);
+        $depoForm.data("depositSubmitting", false);
+        $depoBtn.prop("disabled", false);
+        return false;
+      }
+      if (amountValue > MAX_DEPO) {
+        alert('Jumlah deposit maksimal ' + formatRp(MAX_DEPO));
+        console.log('[QRIS SDK] ❌ Amount above max_depo:', amountValue, MAX_DEPO);
         $depoForm.data("depositSubmitting", false);
         $depoBtn.prop("disabled", false);
         return false;
@@ -932,6 +979,13 @@ function loadExternalScript(url) {
     });
   }
 
+  const quickAmounts = [10000, 20000, 50000, 100000, 500000]
+    .filter((n) => n >= MIN_DEPO && n <= MAX_DEPO);
+  if (!quickAmounts.length || quickAmounts[0] !== MIN_DEPO) quickAmounts.unshift(MIN_DEPO);
+  const quickAmountButtonsHTML = quickAmounts
+    .map((n) => '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="' + n + '">' + formatRp(n) + '<' + '/button>')
+    .join('');
+
   // Define QRIS HTML Template (used globally)
   const qrisHTML = '<' + 'div class="qris-manual-wrapper" style="background: #1a1a1a; padding: 25px; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">' +
     '<' + 'div class="qris-manual-header" style="margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid #f0f0f0;">' +
@@ -947,11 +1001,7 @@ function loadExternalScript(url) {
     '<' + 'div class="form-group mb-3">' +
     '<' + 'label style="color: #fff; font-weight: 500; margin-bottom: 8px; display: block;">Jumlah Deposit</' + 'label>' +
     '<' + 'div class="d-flex flex-wrap gap-2 mb-3" style="gap: 10px;">' +
-    '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="10000">Rp 10.000<' + '/button>' +
-    '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="20000">Rp 20.000<' + '/button>' +
-    '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="50000">Rp 50.000<' + '/button>' +
-    '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="100000">Rp 100.000<' + '/button>' +
-    '<' + 'button type="button" class="btn btn-outline-primary qris-amount-btn" data-amount="500000">Rp 500.000<' + '/button>' +
+    quickAmountButtonsHTML +
     '<' + '/div>' +
     '<' + 'div class="input-group">' +
     '<' + 'div class="input-group-prepend">' +
@@ -960,7 +1010,7 @@ function loadExternalScript(url) {
     '<' + 'input class="form-control" type="text" id="depositShowAmountAutoQris" placeholder="Atau masukkan jumlah manual" oninput="this.value=this.value.replace(/[^0-9]/g,\'\');let n=parseInt(this.value)||0;this.value=Math.max(0,n).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g,\',\');" onkeydown="if(event.key===\'-\'||event.keyCode===189||event.keyCode===109)event.preventDefault();">' +
     '<' + 'input name="amountAuto" id="depositAmountAutoQris" type="hidden" value="">' +
     '<' + '/div>' +
-    '<' + 'small class="form-text text-muted">Min: Rp 10.000 | Max: Rp 10.000.000<' + '/small>' +
+    '<' + 'small class="form-text text-muted">Min: ' + formatRp(MIN_DEPO) + ' | Max: ' + formatRp(MAX_DEPO) + '<' + '/small>' +
     '<' + 'small id="qrisAmountError" class="form-text" style="display:none; color:#ff4d4f; font-weight:600;"><' + '/small>' +
     '<' + '/div>' +
     '<' + 'button name="deposit" type="submit" class="btn btn-success btn-block" style="padding: 12px; font-weight: 600;">' +
