@@ -1,6 +1,8 @@
 // ============================================================================
 // Martabak188 QRIS Instant inject — martabak.js
-// Health ON: tab kita QRIS INSTANT + AUTO/BANK native tetap (desktop & mobile).
+// Tab native sekarang BANK (type=1) + PULSA (type=2); AUTO (type=3) sudah dihapus situs
+// → type=3 di-302 ke type=1. Tab kita = #qris-instant di halaman deposit type apa pun.
+// Health ON: tab kita QRIS INSTANT + tab native tetap (desktop & mobile).
 // Native tab "QRIS INSTANT" duplikat (bukan AUTO/BANK) di-hide saat health ON.
 // Health OFF: tab kita + panel hilang, AUTO/BANK native, duplikat native balik.
 // Path: /user/deposit + /mobile/user/deposit
@@ -9,14 +11,14 @@
 // Embed:
 // <script src=".../martabak.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000"></script>
 // Username: header "Selamat datang," / .menu-top
-// Native form type=3 di-hide saat panel ON
+// Native form deposit di-hide saat panel ON
 // ============================================================================
 
 (function () {
     'use strict';
 
     const LOG = '[MARTABAK-QRIS]';
-    const VERSION = '1.1.3';
+    const VERSION = '1.1.4';
     const SDK_URL = 'https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
     const PANEL_ID = 'mtb-qris-inject-wrap';
     const TAB_ID = 'mtb-poppay-tab';
@@ -157,7 +159,7 @@
     function isOurTab() {
         if (PREVIEW) return true;
         if (!isDepositMenu()) return false;
-        return depositType() === '3' && location.hash === TAB_HASH;
+        return location.hash === TAB_HASH;
     }
 
     function isDepositQrisPage() {
@@ -259,24 +261,35 @@
         );
     }
 
+    function nativeTabType(el) {
+        if (!el || el.id === TAB_ID) return '';
+        const m = String(el.getAttribute('onclick') || el.getAttribute('href') || '').match(/[?&]type=(\d+)/);
+        if (m) return m[1];
+        const t = el.textContent || '';
+        if (/AUTO/i.test(t)) return '3';
+        if (/BANK/i.test(t)) return '1';
+        if (/PULSA/i.test(t)) return '2';
+        return '';
+    }
+
+    function isNativeTabEl(el) {
+        return !!nativeTabType(el);
+    }
+
     function nativeTabRow() {
-        const tabs = Array.from(document.querySelectorAll('div.tab-active, div.tab-nonactive, div[onclick*="deposit"]'));
-        const autos = tabs.filter((el) => /AUTO/i.test(el.textContent || '') && el.id !== TAB_ID);
-        const visible = autos.find((el) => {
+        const tabs = Array.from(document.querySelectorAll('div.tab-active, div.tab-nonactive, div[onclick*="deposit"]'))
+            .filter((el) => el.id !== TAB_ID && isNativeTabEl(el));
+        const visible = tabs.find((el) => {
             const r = el.getBoundingClientRect();
             return r.width > 0 && r.height > 0;
         });
-        const auto = visible || autos[0];
-        if (!auto) return null;
-        return auto.parentElement;
+        const first = visible || tabs[0];
+        if (!first) return null;
+        return first.parentElement;
     }
 
-    function isNativeAutoEl(el) {
-        return !!(el && el.id !== TAB_ID && /AUTO/i.test(el.textContent || ''));
-    }
-
-    function isNativeBankEl(el) {
-        return !!(el && el.id !== TAB_ID && /BANK/i.test(el.textContent || ''));
+    function activeNativeType() {
+        return depositType() || '1';
     }
 
     function tabLabel(el) {
@@ -285,8 +298,8 @@
 
     function isNativeQrisInstantEl(el) {
         if (!el || el.id === TAB_ID) return false;
-        if (isNativeAutoEl(el) || isNativeBankEl(el)) return false;
-        return /qris\s*instant/i.test(tabLabel(el));
+        if (!/qris\s*instant/i.test(tabLabel(el))) return false;
+        return !/[?&]type=\d/.test(String(el.getAttribute('onclick') || ''));
     }
 
     function restoreTabDisplay(el) {
@@ -310,11 +323,11 @@
     function paintNativeTabsOnly() {
         const row = nativeTabRow();
         if (!row) return;
-        const type = depositType();
+        const type = activeNativeType();
         Array.from(row.children).forEach((el) => {
             if (el.id === TAB_ID) return;
-            if (isNativeAutoEl(el)) el.className = type === '3' ? 'tab-active' : 'tab-nonactive';
-            else if (isNativeBankEl(el)) el.className = type === '1' ? 'tab-active' : 'tab-nonactive';
+            const t = nativeTabType(el);
+            if (t) el.className = t === type ? 'tab-active' : 'tab-nonactive';
         });
     }
 
@@ -324,7 +337,7 @@
         const hideDup = healthIsOn() && isDepositMenu();
         Array.from(row.children).forEach((el) => {
             if (el.id === TAB_ID) return;
-            if (isNativeAutoEl(el) || isNativeBankEl(el)) {
+            if (isNativeTabEl(el)) {
                 restoreTabDisplay(el);
                 return;
             }
@@ -340,18 +353,19 @@
         const row = nativeTabRow();
         if (!row) return;
         const ours = isOurTab() && healthIsOn();
-        const type = depositType();
+        const type = activeNativeType();
         Array.from(row.children).forEach((el) => {
             if (el.id === TAB_ID) {
                 el.className = ours ? 'tab-active' : 'tab-nonactive';
                 return;
             }
+            const t = nativeTabType(el);
+            if (!t) return;
             if (ours) {
-                if (isNativeAutoEl(el) || isNativeBankEl(el)) el.className = 'tab-nonactive';
+                el.className = 'tab-nonactive';
                 return;
             }
-            if (isNativeAutoEl(el)) el.className = type === '3' ? 'tab-active' : 'tab-nonactive';
-            else if (isNativeBankEl(el)) el.className = type === '1' ? 'tab-active' : 'tab-nonactive';
+            el.className = t === type ? 'tab-active' : 'tab-nonactive';
         });
         applyNativeTabVisibility();
     }
@@ -364,13 +378,13 @@
 
     function goOurTab(opts) {
         try { sessionStorage.removeItem(NATIVE_AUTO_KEY); } catch (_) {}
-        if (depositType() === '3') {
+        if (isDepositMenu()) {
             setOurHashQuiet();
             paintTabs();
             if (!(opts && opts.skipSync)) syncInjectPanel('tab').catch(() => {});
             return;
         }
-        window.location = depositBase() + '?type=3' + TAB_HASH;
+        window.location = depositBase() + '?type=1' + TAB_HASH;
     }
 
     function markNativeAuto() {
@@ -392,7 +406,7 @@
         row.setAttribute('data-mtb-tab-bound', '1');
         row.addEventListener('click', function (e) {
             const el = e.target && e.target.closest && e.target.closest('div.tab-active, div.tab-nonactive');
-            if (isNativeAutoEl(el)) markNativeAuto();
+            if (isNativeTabEl(el)) markNativeAuto();
         }, true);
     }
 
@@ -400,13 +414,11 @@
         if (PREVIEW) return true;
         if (!isDepositMenu() || !healthIsOn()) return false;
         if (isOurTab()) return true;
-        if (depositType() === '1') return false;
-        if (depositType() === '3' && consumeNativeAuto()) return false;
-        if (depositType() === '3' || depositType() === '') {
-            goOurTab({ skipSync: true });
-            return true;
-        }
-        return false;
+        // Klik tab BANK/PULSA native → biarkan native sekali.
+        if (consumeNativeAuto()) return false;
+        if (depositType() === '2') return false;
+        goOurTab({ skipSync: true });
+        return true;
     }
 
     function ensureOurTab() {
@@ -936,7 +948,7 @@
         }
         if (!placed) {
             wrap.remove();
-            console.warn(LOG, 'inject gagal — mount deposit type=3 belum ada');
+            console.warn(LOG, 'inject gagal — baris tab deposit (BANK/PULSA) belum ada');
             return false;
         }
         setNativeHidden(true);
