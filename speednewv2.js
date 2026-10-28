@@ -1,7 +1,8 @@
 // ============================================================================
 // SPEED ENGINE QRIS POPPAY INJECTION
 // Adapted from ug_test_simple.js for speed.html / Sip69 deposit page
-// BOB RESEARCH LABS - speednewv2.js (v1.4.2 — anti double invoice; guard baca invoice_id)
+// BOB RESEARCH LABS - speedv7.js (v1.5.0 — panel tidak menimpa nav situs + tampilan ikut tema)
+// Basis speednewv2.js v1.4.2 (anti double invoice; guard baca invoice_id)
 // Deposit hanya via Poppay webhook — tidak POST /services/deposits
 // Target DOM: inject HANYA saat #deposit-qr-tab aktif (aria-selected)
 // Tab bank/va/ewallet/pulsa → teardown Poppay, form native balik
@@ -29,7 +30,7 @@
     }
     window.__SPEED_QRIS_INJECT_BOOTED__ = true;
 
-    console.log('🚀 [SPEED-QRIS] Starting speednewv2 v1.4.2 (anti double invoice)...');
+    console.log('🚀 [SPEED-QRIS] Starting speedv7 v1.5.0 (anti double invoice)...');
 
     // Sniff X-Data-Reference dari native Speed fetch/XHR (wajib untuk players/identity API)
     let _speedXRefSniffed = '';
@@ -309,9 +310,16 @@
         return merged.filter((a) => a >= min && a <= max).sort((a, b) => a - b);
     }
 
+    function formatRpShort(rupiah) {
+        const n = Number(rupiah) || 0;
+        if (n >= 1000000) return 'Rp ' + (n / 1000000).toLocaleString('id-ID', { maximumFractionDigits: 1 }) + 'jt';
+        if (n >= 1000) return 'Rp ' + (n / 1000).toLocaleString('id-ID', { maximumFractionDigits: 1 }) + 'rb';
+        return 'Rp ' + n.toLocaleString('id-ID');
+    }
+
     function renderQuickAmountButtons() {
         return getQuickAmountPresets()
-            .map((a) => `<button type="button" class="qris-amount-btn" data-amount="${a}">${a}</button>`)
+            .map((a) => `<button type="button" class="qris-amount-btn" data-amount="${a}"><span class="qa-coin">${a}</span><span class="qa-rp">${formatRpShort(a * CONVERSION_RATIO)}</span></button>`)
             .join('\n                                ');
     }
 
@@ -968,7 +976,7 @@
         }
 
         const response = await fetchPromotionList();
-        select.innerHTML = '<option value="">Pilih Promosi (Opsional)</option>';
+        select.innerHTML = '<option value="">Deposit tanpa promo</option>';
 
         let promotions = [];
         if (response && response.d && Array.isArray(response.d.promotions)) {
@@ -1368,13 +1376,15 @@
         const wrapper = document.createElement('div');
         wrapper.id = 'ug-poppay-wrapper';
         wrapper.setAttribute('data-ug-persistent', 'true');
+        // z-index 0: panel tetap di bawah header & bottom-nav situs (fixed). 9999 bikin panel
+        // menimpa navigasi saat scroll.
         wrapper.style.cssText = `
             position: relative !important;
-            z-index: 9999 !important;
+            z-index: 0 !important;
             display: block !important;
             visibility: visible !important;
             opacity: 1 !important;
-            margin-bottom: 20px !important;
+            margin-bottom: 16px !important;
         `;
 
         // Create new Poppay element (isolated container)
@@ -1424,28 +1434,11 @@
                 #ug-poppay-qris-full {
                     isolation: isolate;
                     position: relative !important;
-                    z-index: 1000 !important;
+                    z-index: 0 !important;
                     pointer-events: auto !important;
                     display: block !important;
                     opacity: 1 !important;
                     visibility: visible !important;
-                }
-                
-                /* Debug indicator - shows injection is active */
-                #ug-poppay-qris-full::before {
-                    content: '🔒 QRIS Automation Poppay Active';
-                    position: absolute;
-                    top: -5px;
-                    right: 0;
-                    background: rgba(76, 175, 80, 0.15);
-                    color: #4CAF50;
-                    font-size: 10px;
-                    padding: 2px 6px;
-                    border-radius: 3px;
-                    font-weight: 600;
-                    opacity: 0.85;
-                    pointer-events: none;
-                    z-index: 9999;
                 }
                 
                 #ug-poppay-qris-full * {
@@ -1458,257 +1451,398 @@
                     visibility: visible !important;
                 }
                 
+                #ug-poppay-qris-full {
+                    --sq-teal: #2fa9c3;
+                    --sq-teal-dark: #23889e;
+                    --sq-green: #16a34a;
+                    --sq-green-dark: #128a3e;
+                    --sq-line: rgba(255, 255, 255, 0.16);
+                    --sq-muted: rgba(255, 255, 255, 0.68);
+                    font-family: inherit;
+                }
+
                 .qris-manual-wrapper {
-                    background: #1a1a1a;
+                    background: rgba(12, 12, 12, 0.62);
+                    -webkit-backdrop-filter: blur(3px);
+                    backdrop-filter: blur(3px);
                     color: #fff;
-                    padding: ${CONFIG.IS_MOBILE ? '12px' : '25px'};
-                    border-radius: ${CONFIG.IS_MOBILE ? '8px' : '12px'};
-                    margin-bottom: ${CONFIG.IS_MOBILE ? '10px' : '25px'};
-                    box-shadow: 0 4px 16px rgba(0,0,0,0.35);
-                    border: 1px solid #333;
-                    max-width: 100%;
+                    padding: 18px 20px 20px;
+                    border-radius: 14px;
+                    margin: 0 0 18px;
+                    border: 1px solid var(--sq-line);
+                    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
                     width: 100%;
-                    overflow-x: hidden;
+                    max-width: 100%;
+                    overflow: hidden;
                     position: relative;
                     box-sizing: border-box;
                     color-scheme: dark;
+                    font-family: inherit;
                 }
-                
+
+                .qris-manual-wrapper *,
+                .qris-manual-wrapper *::before,
+                .qris-manual-wrapper *::after {
+                    box-sizing: border-box;
+                }
+
                 @media (max-width: 768px) {
                     .qris-manual-wrapper {
-                        padding: 10px !important;
-                        margin: 0 !important;
+                        padding: 14px 14px 16px !important;
+                        border-radius: 12px !important;
+                        margin: 0 0 14px !important;
                     }
                 }
-                
+
                 .qris-manual-header {
-                    margin-bottom: 20px;
-                    padding-bottom: 15px;
-                    border-bottom: 2px solid #333;
-                }
-                
-                .qris-manual-header h5 {
-                    color: #fff;
-                    font-weight: 600;
-                    margin: 0;
                     display: flex;
                     align-items: center;
-                    font-size: ${CONFIG.IS_MOBILE ? '16px' : '18px'};
-                    word-wrap: break-word;
+                    gap: 12px;
+                    margin-bottom: 16px;
+                    padding-bottom: 14px;
+                    border-bottom: 1px solid var(--sq-line);
                 }
-                
+
+                .qris-head-icon {
+                    flex: 0 0 auto;
+                    width: 42px;
+                    height: 42px;
+                    border-radius: 10px;
+                    background: #fff;
+                    color: #111;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-weight: 800;
+                    font-size: 11px;
+                    letter-spacing: 0.04em;
+                }
+
+                .qris-head-text {
+                    flex: 1 1 auto;
+                    min-width: 0;
+                }
+
+                .qris-manual-header h5 {
+                    color: #fff;
+                    font-weight: 700;
+                    margin: 0;
+                    font-size: 18px;
+                    line-height: 1.2;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    flex-wrap: wrap;
+                }
+
+                .qris-auto-pill {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 5px;
+                    font-size: 11px;
+                    font-weight: 600;
+                    color: #b7f5c9;
+                    background: rgba(22, 163, 74, 0.22);
+                    border: 1px solid rgba(22, 163, 74, 0.55);
+                    border-radius: 999px;
+                    padding: 2px 8px;
+                }
+
+                .qris-auto-pill::before {
+                    content: '';
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 50%;
+                    background: #22c55e;
+                }
+
+                .qris-manual-header p {
+                    color: var(--sq-muted);
+                    font-size: 12.5px;
+                    line-height: 1.4;
+                    margin: 4px 0 0;
+                }
+
                 @media (max-width: 768px) {
                     .qris-manual-header h5 {
-                        font-size: 14px !important;
+                        font-size: 16px !important;
+                    }
+                    .qris-head-icon {
+                        width: 38px;
+                        height: 38px;
                     }
                 }
-                
-                .qris-manual-header .qris-icon {
-                    width: 24px;
-                    height: 24px;
-                    margin-right: 10px;
-                    color: #4CAF50;
-                    font-size: 20px;
+
+                .qris-form .form-group {
+                    margin: 0 0 14px;
                 }
-                
-                .qris-manual-header p {
-                    color: #aaa;
-                    font-size: 13px;
-                    margin: 8px 0 0 0;
-                }
-                
+
                 .qris-form label {
-                    color: #ddd;
-                    font-weight: 500;
-                    margin-bottom: 8px;
+                    color: #fff;
+                    font-weight: 700;
+                    font-size: 14px;
+                    margin: 0 0 7px;
                     display: block;
                 }
-                
+
                 .qris-amount-buttons {
-                    display: flex;
-                    flex-wrap: wrap;
-                    gap: ${CONFIG.IS_MOBILE ? '8px' : '10px'};
-                    margin-bottom: 15px;
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(62px, 1fr));
+                    gap: 8px;
+                    margin-bottom: 12px;
                     user-select: none;
                     -webkit-user-select: none;
                     pointer-events: auto;
                     width: 100%;
-                    box-sizing: border-box;
                 }
-                
-                @media (max-width: 768px) {
-                    .qris-amount-buttons {
-                        gap: 6px !important;
-                    }
-                }
-                
+
                 .qris-amount-btn {
-                    padding: ${CONFIG.IS_MOBILE ? '10px 8px' : '8px 16px'};
-                    border: 1px solid #444;
-                    background: #2a2a2a;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 1px;
+                    min-height: 46px;
+                    padding: 6px 4px;
+                    border: 1px solid rgba(255, 255, 255, 0.75);
+                    background: transparent;
                     color: #fff;
-                    border-radius: 6px;
+                    border-radius: 8px;
                     cursor: pointer !important;
-                    font-size: ${CONFIG.IS_MOBILE ? '12px' : '14px'};
-                    font-weight: 500;
-                    transition: all 0.3s;
-                    flex: ${CONFIG.IS_MOBILE ? '1 1 calc(50% - 3px)' : '0 0 auto'};
-                    min-width: ${CONFIG.IS_MOBILE ? '0' : 'auto'};
-                    max-width: ${CONFIG.IS_MOBILE ? 'calc(50% - 3px)' : 'none'};
+                    font-family: inherit;
+                    line-height: 1.1;
+                    transition: background 0.15s, border-color 0.15s, transform 0.1s;
                     touch-action: manipulation;
                     -webkit-tap-highlight-color: transparent;
                     white-space: nowrap;
                     overflow: hidden;
-                    text-overflow: ellipsis;
-                    box-sizing: border-box;
                     pointer-events: auto !important;
-                    user-select: none;
-                    -webkit-user-select: none;
                     position: relative;
-                    z-index: 1;
                 }
-                
-                @media (max-width: 768px) {
-                    .qris-amount-btn {
-                        flex: 1 1 calc(50% - 3px) !important;
-                        max-width: calc(50% - 3px) !important;
-                        font-size: 11px !important;
-                        padding: 10px 6px !important;
-                    }
+
+                .qris-amount-btn .qa-coin {
+                    font-size: 16px;
+                    font-weight: 700;
                 }
-                
-                @media (max-width: 400px) {
-                    .qris-amount-btn {
-                        flex: 1 1 calc(50% - 3px) !important;
-                        font-size: 10px !important;
-                        padding: 8px 4px !important;
-                    }
+
+                .qris-amount-btn .qa-rp {
+                    font-size: 10.5px;
+                    color: var(--sq-muted);
+                    font-weight: 500;
                 }
-                
+
                 .qris-amount-btn:hover {
-                    background: #4CAF50;
-                    color: #fff;
-                    border-color: #4CAF50;
+                    border-color: var(--sq-teal);
+                    background: rgba(47, 169, 195, 0.14);
                 }
-                
+
                 .qris-amount-btn.active {
-                    background: #4CAF50 !important;
+                    background: var(--sq-teal) !important;
+                    border-color: var(--sq-teal) !important;
                     color: #fff !important;
-                    border-color: #4CAF50 !important;
                 }
-                
+
+                .qris-amount-btn.active .qa-rp {
+                    color: rgba(255, 255, 255, 0.9);
+                }
+
                 .qris-amount-btn:active {
-                    transform: scale(0.98);
+                    transform: scale(0.97);
                 }
-                
+
+                @media (max-width: 480px) {
+                    .qris-amount-buttons {
+                        grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
+                        gap: 6px;
+                    }
+                    .qris-amount-btn {
+                        min-height: 44px;
+                        padding: 5px 2px;
+                    }
+                    .qris-amount-btn .qa-coin {
+                        font-size: 15px;
+                    }
+                    .qris-amount-btn .qa-rp {
+                        font-size: 9.5px;
+                    }
+                    .qris-amount-labels,
+                    .qris-dual-input-wrapper {
+                        grid-template-columns: minmax(72px, 0.75fr) 16px 1.4fr;
+                        gap: 6px;
+                    }
+                }
+
+                @media (max-width: 360px) {
+                    .qris-amount-buttons {
+                        grid-template-columns: repeat(auto-fit, minmax(44px, 1fr));
+                        gap: 5px;
+                    }
+                    .qris-amount-btn .qa-coin {
+                        font-size: 14px;
+                    }
+                    .qris-amount-btn .qa-rp {
+                        font-size: 8.5px;
+                    }
+                }
+
+                .qris-amount-labels {
+                    display: grid;
+                    grid-template-columns: minmax(84px, 0.8fr) 22px 1.4fr;
+                    gap: 8px;
+                    margin: 2px 0 6px;
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: var(--sq-muted);
+                }
+
+                .qris-amount-labels span:last-child {
+                    grid-column: 3;
+                }
+
                 .qris-dual-input-wrapper {
-                    display: flex;
+                    display: grid;
+                    grid-template-columns: minmax(84px, 0.8fr) 22px 1.4fr;
                     align-items: center;
-                    gap: ${CONFIG.IS_MOBILE ? '8px' : '12px'};
+                    gap: 8px;
                     margin-bottom: 10px;
                     width: 100%;
                 }
-                
+
                 .qris-input-group {
                     display: flex;
-                    flex: 1;
+                    min-width: 0;
                 }
-                
-                .qris-input-small {
-                    flex: 0 0 ${CONFIG.IS_MOBILE ? '90px' : '120px'};
-                }
-                
-                .qris-input-display {
-                    flex: 1;
-                }
-                
+
                 .qris-input-arrow {
-                    color: #4CAF50;
-                    font-size: ${CONFIG.IS_MOBILE ? '18px' : '24px'};
-                    font-weight: bold;
-                    flex-shrink: 0;
+                    color: #fff;
+                    opacity: 0.7;
+                    font-size: 18px;
+                    font-weight: 700;
+                    text-align: center;
                 }
-                
+
                 .qris-input {
                     flex: 1;
                     min-width: 0;
-                    padding: 12px ${CONFIG.IS_MOBILE ? '12px' : '16px'};
-                    border: 1px solid #444;
+                    height: 44px;
+                    padding: 0 12px;
+                    border: 1px solid #d4d4d4;
                     border-radius: 6px;
-                    font-size: ${CONFIG.IS_MOBILE ? '14px' : '16px'};
+                    font-size: 15px;
+                    font-family: inherit;
                     width: 100%;
-                    box-sizing: border-box;
-                    background: #2a2a2a;
-                    color: #fff;
-                    text-align: center;
+                    background: #fff;
+                    color: #222;
+                    text-align: left;
                 }
-                
+
+                .qris-input:focus {
+                    outline: none;
+                    border-color: var(--sq-teal);
+                    box-shadow: 0 0 0 3px rgba(47, 169, 195, 0.28);
+                }
+
+                .qris-input::placeholder {
+                    color: #9a9a9a;
+                }
+
+                #depositInputAutoQris {
+                    text-align: center;
+                    font-weight: 700;
+                }
+
                 .qris-display-readonly {
-                    background: #1a1a1a;
-                    color: #4CAF50;
-                    font-weight: 600;
-                    cursor: not-allowed;
-                    border-color: #4CAF50;
+                    background: #ececec;
+                    color: #222;
+                    font-weight: 700;
+                    cursor: default;
+                    border-color: #d4d4d4;
                 }
 
                 .qris-username-readonly {
-                    text-align: left;
-                    letter-spacing: 0.02em;
-                    font-family: ui-monospace, Consolas, monospace;
+                    letter-spacing: 0.01em;
                 }
 
                 .qris-username-readonly[data-error="true"] {
-                    border-color: #f44336 !important;
-                    color: #ff8a80 !important;
+                    border-color: #ef4444 !important;
+                    color: #b91c1c !important;
+                    background: #fde8e8 !important;
                 }
-                
-                .qris-input:focus {
-                    outline: none;
-                    border-color: #4CAF50;
-                }
-                
+
                 select.qris-input {
-                    border-radius: 6px;
-                    width: 100%;
+                    cursor: pointer;
                 }
-                
-                .qris-input::placeholder {
-                    color: #666;
-                }
-                
+
                 .qris-input-hint {
+                    display: block;
                     font-size: 12px;
-                    color: #888;
-                    margin-top: 5px;
+                    color: var(--sq-muted);
+                    margin-top: 6px;
                 }
-                
+
+                .qris-minmax {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    margin-top: 2px;
+                    padding: 8px 12px;
+                    border-radius: 6px;
+                    background: var(--sq-green);
+                    color: #fff;
+                    font-size: 12px;
+                    font-weight: 600;
+                    line-height: 1.35;
+                }
+
+                .qris-minmax-icon {
+                    flex: 0 0 auto;
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 50%;
+                    border: 2px solid #facc15;
+                    color: #facc15;
+                    font-size: 11px;
+                    font-weight: 800;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+
                 .qris-submit-btn {
                     width: 100%;
-                    padding: ${CONFIG.IS_MOBILE ? '16px' : '14px'};
-                    background: #4CAF50;
-                    color: white;
+                    min-height: 48px;
+                    margin-top: 4px;
+                    padding: 12px 16px;
+                    background: var(--sq-green);
+                    color: #fff;
                     border: none;
-                    border-radius: 6px;
-                    font-size: ${CONFIG.IS_MOBILE ? '15px' : '16px'};
-                    font-weight: 600;
+                    border-radius: 999px;
+                    font-size: 16px;
+                    font-weight: 700;
+                    font-family: inherit;
                     cursor: pointer;
                     display: flex;
                     align-items: center;
                     justify-content: center;
                     gap: 8px;
-                    transition: all 0.3s;
+                    transition: background 0.15s, transform 0.1s;
                     touch-action: manipulation;
                     -webkit-tap-highlight-color: transparent;
-                    min-height: ${CONFIG.IS_MOBILE ? '48px' : 'auto'};
+                    box-shadow: 0 4px 12px rgba(22, 163, 74, 0.35);
                 }
-                
+
                 .qris-submit-btn:hover {
-                    background: #45a049;
+                    background: var(--sq-green-dark);
                 }
-                
+
+                .qris-submit-btn:active {
+                    transform: scale(0.99);
+                }
+
                 .qris-submit-btn:disabled {
-                    background: #444;
-                    color: #888;
+                    background: #6b6b6b;
+                    color: #d4d4d4;
+                    box-shadow: none;
                     cursor: not-allowed;
                 }
                 
@@ -1761,11 +1895,11 @@
             
             <div class="qris-manual-wrapper">
                 <div class="qris-manual-header">
-                    <h5>
-                        <span class="qris-icon">💳</span>
-                        QRIS Instant
-                    </h5>
-                    <p>Scan QR code dengan e-wallet favorit Anda (DANA, OVO, GoPay, ShopeePay, dll)</p>
+                    <div class="qris-head-icon">QRIS</div>
+                    <div class="qris-head-text">
+                        <h5>QRIS Instant <span class="qris-auto-pill">Otomatis</span></h5>
+                        <p>Scan pakai DANA, OVO, GoPay, ShopeePay, atau m-banking. Saldo masuk otomatis.</p>
+                    </div>
                 </div>
                 
                 <div class="qris-form" id="qrisFormContainer">
@@ -1773,7 +1907,7 @@
                         <input type="hidden" id="bankSelectAutoQris" value="QRIS">
                         <input type="hidden" id="speedQrisUsername" value="">
                         
-                        <div class="form-group mb-3">
+                        <div class="form-group">
                             <label>Username</label>
                             <input
                                 class="qris-input qris-display-readonly qris-username-readonly"
@@ -1784,19 +1918,18 @@
                                 autocomplete="off"
                                 placeholder="Memuat username..."
                             >
-                            <small class="qris-input-hint">Terisi otomatis dari session login (readonly)</small>
                         </div>
                         
-                        <div class="form-group mb-3">
-                            <label>Jumlah Deposit</label>
+                        <div class="form-group">
+                            <label>Nominal Koin</label>
                             
                             <div class="qris-amount-buttons" id="ug-amount-buttons">
                                 ${renderQuickAmountButtons()}
                             </div>
                             
-                            <div style="display: flex; justify-content: space-between; margin-top: 12px; margin-bottom: 4px;">
-                                <small style="color: #888; font-size: 11px;">Masukkan Jumlah</small>
-                                <small style="color: #4CAF50; font-size: 11px;">= Setara Rupiah</small>
+                            <div class="qris-amount-labels">
+                                <span>Koin</span>
+                                <span>Nominal Transfer</span>
                             </div>
                             
                             <div class="qris-dual-input-wrapper">
@@ -1810,7 +1943,7 @@
                                         autocomplete="off"
                                     >
                                 </div>
-                                <div class="qris-input-arrow">→</div>
+                                <div class="qris-input-arrow">=</div>
                                 <div class="qris-input-group qris-input-display">
                                     <input 
                                         class="qris-input qris-display-readonly" 
@@ -1824,20 +1957,21 @@
                             </div>
                             <input type="hidden" id="depositAmountAutoQris" value="">
                             
-                            <small class="qris-input-hint">Min: ${CONFIG.MIN_DISPLAY} (= Rp ${CONFIG.MIN_AMOUNT.toLocaleString('id-ID')}) | Max: ${CONFIG.MAX_DISPLAY} (= Rp ${CONFIG.MAX_AMOUNT.toLocaleString('id-ID')})</small>
+                            <div class="qris-minmax">
+                                <span class="qris-minmax-icon">!</span>
+                                <span>Min: ${CONFIG.MIN_DISPLAY} koin (Rp ${CONFIG.MIN_AMOUNT.toLocaleString('id-ID')}) · Max: ${CONFIG.MAX_DISPLAY.toLocaleString('id-ID')} koin (Rp ${CONFIG.MAX_AMOUNT.toLocaleString('id-ID')}) · 1 Koin = Rp ${CONFIG.CONVERSION_RATIO.toLocaleString('id-ID')}</span>
+                            </div>
                         </div>
                         
-                        <div class="form-group mb-3">
+                        <div class="form-group">
                             <label>Promosi (Opsional)</label>
                             <select class="qris-input" id="depositPromotionAutoQris">
-                                <option value="">Pilih Promosi (Opsional)</option>
+                                <option value="">Deposit tanpa promo</option>
                                 <option value="loading" disabled>Loading...</option>
                             </select>
-                            <small class="qris-input-hint">Pilih promosi yang tersedia atau biarkan kosong</small>
                         </div>
                         
                         <button type="submit" class="qris-submit-btn">
-                            <span>💳</span>
                             <span id="qris-btn-text">Generate QR Code</span>
                         </button>
                     </form>
