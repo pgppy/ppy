@@ -899,14 +899,14 @@
                 formContainer.style.display = 'none';
                 resultContainer.classList.add('active');
                 await new Promise((r) => setTimeout(r, 80));
-                const invoice = 'KINGBET-' + Date.now();
+                const invoice = 'KING-' + Date.now();
                 const payment = new window.QrisSDK({
                     healthCheckEnabled: false,
                     storeKey: STORE_KEY,
                     store_key: STORE_KEY,
                     amount: amount,
                     invoice: invoice,
-                    notes: 'KINGBET Auto Deposit - ' + invoice,
+                    notes: 'KING Auto Deposit - ' + invoice,
                     username: username,
                     payor_name: username,
                     payor_email: '',
