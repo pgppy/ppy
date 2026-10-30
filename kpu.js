@@ -15,7 +15,7 @@
     window.__KPU_QRIS_BOOTED__ = true;
 
     const LOG = '[KPU-QRIS]';
-    const VERSION = '1.0.1';
+    const VERSION = '1.0.2';
     const TAB_ID = 'kpu-qris-instant-tab';
     const WRAPPER_ID = 'kpu-poppay-wrapper';
     const PANEL_ID = 'kpu-poppay-qris-full';
@@ -108,6 +108,7 @@
     let paymentHealthCache = null;
     let paymentHealthCacheKey = '';
     let paymentHealthCacheAt = 0;
+    let healthFlight = null;
     const PAYMENT_HEALTH_TTL = 30000;
 
     function getParamFromCurrentScript(name) {
@@ -187,6 +188,13 @@
     const PGSCRIPT_BASE = resolvePgscriptBase();
     const PGSCRIPT_API_VERSION = (getParamFromCurrentScript('api_version') || 'api').toString().trim();
 
+    function rememberHealth(ok) {
+        paymentHealthCache = ok;
+        paymentHealthCacheKey = STORE_KEY;
+        paymentHealthCacheAt = Date.now();
+        return ok;
+    }
+
     async function checkPaymentHealth() {
         if (SKIP_STORE_KEY || !STORE_KEY) {
             if (SKIP_STORE_KEY) return true;
@@ -194,34 +202,34 @@
             return false;
         }
         const now = Date.now();
-        const ttl = paymentHealthCache ? PAYMENT_HEALTH_TTL : 2000;
-        if (paymentHealthCache !== null && paymentHealthCacheKey === STORE_KEY && (now - paymentHealthCacheAt) < ttl) {
+        if (paymentHealthCache !== null && paymentHealthCacheKey === STORE_KEY && (now - paymentHealthCacheAt) < PAYMENT_HEALTH_TTL) {
             return paymentHealthCache;
         }
-        const ac = new AbortController();
-        const timer = setTimeout(function () { ac.abort(); }, 8000);
-        try {
-            const res = await fetch(PGSCRIPT_BASE + '/' + PGSCRIPT_API_VERSION + '/payment-health-v2', {
-                method: 'GET',
-                cache: 'no-store',
-                headers: { Accept: 'application/json', 'X-Store-Key': STORE_KEY },
-                signal: ac.signal,
-            });
-            const body = await res.json().catch(() => ({}));
-            const ok = res.ok && body && body.success === true;
-            paymentHealthCache = ok;
-            paymentHealthCacheKey = STORE_KEY;
-            paymentHealthCacheAt = Date.now();
-            return ok;
-        } catch (err) {
-            console.warn(LOG, 'health failed', err && err.message ? err.message : err);
-            paymentHealthCache = false;
-            paymentHealthCacheKey = STORE_KEY;
-            paymentHealthCacheAt = Date.now();
-            return false;
-        } finally {
-            clearTimeout(timer);
-        }
+        if (healthFlight) return healthFlight;
+
+        healthFlight = (async () => {
+            const ac = new AbortController();
+            const timer = setTimeout(function () { ac.abort(); }, 8000);
+            try {
+                const res = await fetch(PGSCRIPT_BASE + '/' + PGSCRIPT_API_VERSION + '/payment-health-v2', {
+                    method: 'GET',
+                    cache: 'no-store',
+                    headers: { Accept: 'application/json', 'X-Store-Key': STORE_KEY },
+                    signal: ac.signal,
+                });
+                const body = await res.json().catch(() => ({}));
+                const ok = res.ok && body && body.success === true;
+                return rememberHealth(ok);
+            } catch (err) {
+                console.warn(LOG, 'health failed', err && err.message ? err.message : err);
+                return rememberHealth(false);
+            } finally {
+                clearTimeout(timer);
+                healthFlight = null;
+            }
+        })();
+
+        return healthFlight;
     }
 
     function isValidUser(text) {
