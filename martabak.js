@@ -961,6 +961,7 @@
             return;
         }
         const healthOk = await checkPaymentHealth();
+        if (!healthOk) {
             teardownHealthOff(`payment-health OFF${reason ? ` (${reason})` : ''}`);
             return;
         }
