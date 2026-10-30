@@ -16,7 +16,7 @@
     'use strict';
 
     const LOG = '[JAGOWIN-QRIS]';
-    const VERSION = '1.0.0';
+    const VERSION = '1.0.1';
 
     if (window.__JAGOWIN_QRIS_BOOTED__ === VERSION) {
         console.log(LOG, 'already booted', VERSION);
@@ -71,7 +71,7 @@
             const current = document.currentScript;
             const scripts = Array.from(document.querySelectorAll('script[src]')).map((s) => s.src).reverse();
             const named = current?.src || scripts.find((url) =>
-                /jagowin\.js(\?|$)|atlas98?\.js(\?|$)|bestie\.js(\?|$)|BESTIEv[0-9]+\.js(\?|$)|rajabm(?:_qris)?\.js(\?|$)|rbmv[0-9]+\.js(\?|$)/i.test(url)
+                /jago(?:win)?\.js(\?|$)|atlas98?\.js(\?|$)|bestie\.js(\?|$)|BESTIEv[0-9]+\.js(\?|$)|rajabm(?:_qris)?\.js(\?|$)|rbmv[0-9]+\.js(\?|$)/i.test(url)
             );
             const src = named || scripts.find((url) => {
                 try {
@@ -889,8 +889,8 @@
         return 'JAGO-' + Date.now().toString(36).toUpperCase() + rand;
     }
 
-    // Ambil daftar promo dari form deposit native JAGOWIN (select.promoList / #promo_event).
-    // Promo per-metode: mis. e-wallet punya "QRIS10JAGOWIN11", bank bisa kosong.
+    // Form deposit native (select.promoList) sudah berisi kode promo.
+    // API /deposit-promo-details untuk bank sering "tidak diizinkan"; e-wallet yang mengizinkan.
     function nativeFetchHtml(url) {
         return fetch(url, {
             credentials: 'same-origin',
@@ -924,6 +924,35 @@
         return out;
     }
 
+    // Opsi nyata dari <select class="promoList">. Value "0" / kosong = placeholder "Pilih promo".
+    function promosFromFormHtml(html) {
+        const out = [];
+        if (!html || html.indexOf('promo') === -1) return out;
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        doc.querySelectorAll('select.promoList option, select#promo_event option').forEach((o) => {
+            const code = (o.value || '').trim();
+            if (!code || code === '0') return;
+            let title = (o.textContent || '').replace(/\s+/g, ' ').trim();
+            const pipe = title.lastIndexOf('|');
+            if (pipe > 0) title = title.slice(0, pipe).trim();
+            if (!title) title = code;
+            out.push({ code, title, min: 0, max: 0 });
+        });
+        return out;
+    }
+
+    function rememberPromo(promos, p) {
+        if (!p || !p.code) return;
+        const hit = promos.find((x) => x.code === p.code);
+        if (!hit) {
+            promos.push(p);
+            return;
+        }
+        if (!hit.min && p.min) hit.min = p.min;
+        if (!hit.max && p.max) hit.max = p.max;
+        if (p.title && (hit.title === hit.code || !hit.title)) hit.title = p.title;
+    }
+
     // POST /deposit-promo-details → daftar promo (promo_code, title, min, max) untuk 1 metode.
     function fetchPromoDetails(token, method, provider, pid) {
         const body = new URLSearchParams({
@@ -943,41 +972,55 @@
             const grp = document.getElementById('jg-promo-group');
             if (!sel || !grp) return;
             const items = Array.from(document.querySelectorAll('.deposit .methods_form .payment-methods-items'))
-                .map((a) => ({ method: a.getAttribute('data-method'), provider: a.getAttribute('data-provider') }))
+                .map((a) => ({
+                    method: a.getAttribute('data-method') || '',
+                    provider: a.getAttribute('data-provider') || '',
+                    pid: a.getAttribute('data-p_id') || a.getAttribute('data-pid') || '',
+                }))
                 .filter((x) => x.method && x.provider);
-            if (!items.length) return;
+            if (!items.length) {
+                console.warn(LOG, 'promo skip: payment-methods-items tidak ketemu');
+                return;
+            }
 
-            // Satu form untuk peta provider→pID (semua metode) + token.
-            const first = items[0];
-            const map = parseBankMap(await nativeFetchHtml(
-                `/account/load_deposit_form?isgateway=0&method=${encodeURIComponent(first.method)}&provider=${encodeURIComponent(first.provider)}&pID=${encodeURIComponent(first.provider)}`
-            ));
-            const token = getCsrfToken() || map.token;
-            if (!token || !map.banks.length) return;
-
+            // Method besar dulu (7 e-wallet sebelum 5 bank). Form bank tidak memuat select e-wallet,
+            // jadi peta dari form pertama saja tidak pernah sampai ke promo QRIS.
+            const ordered = items.slice().sort((a, b) => (parseInt(b.method, 10) || 0) - (parseInt(a.method, 10) || 0));
             const promos = [];
             const seenMethod = new Set();
-            for (const it of items) {
+            let token = getCsrfToken();
+            for (const it of ordered) {
                 if (seenMethod.has(it.method)) continue;
                 seenMethod.add(it.method);
+                const pid = it.pid || it.provider;
+                const html = await nativeFetchHtml(
+                    `/account/load_deposit_form?isgateway=0&method=${encodeURIComponent(it.method)}&provider=${encodeURIComponent(it.provider)}&pID=${encodeURIComponent(pid)}`
+                );
+                promosFromFormHtml(html).forEach((p) => rememberPromo(promos, p));
+
+                const map = parseBankMap(html);
+                if (!token && map.token) token = map.token;
+                if (!token) continue;
                 const bm = map.banks.find((b) => b.method === it.method && b.provider === it.provider)
-                    || map.banks.find((b) => b.method === it.method);
-                if (!bm) continue;
-                const json = await fetchPromoDetails(token, it.method, bm.provider, bm.pid);
+                    || map.banks.find((b) => b.method === it.method)
+                    || { provider: it.provider, pid };
+                const json = await fetchPromoDetails(token, it.method, bm.provider, bm.pid || pid);
                 const d = json && json.data;
                 if (!d || d.is_show_promo === false) continue;
                 (d.promotions || []).forEach((p) => {
                     if (!p.promo_code || p.hide_promo === 1 || p.hide_promo === '1') return;
-                    if (promos.some((x) => x.code === p.promo_code)) return;
-                    promos.push({
-                        code: p.promo_code,
+                    rememberPromo(promos, {
+                        code: String(p.promo_code).trim(),
                         title: (p.title || p.promo_code).trim(),
                         min: parseInt(p.min, 10) || 0,
                         max: parseInt(p.max, 10) || 0,
                     });
                 });
             }
-            if (!promos.length) return;
+            if (!promos.length) {
+                console.warn(LOG, 'promo kosong setelah cek', seenMethod.size, 'metode');
+                return;
+            }
             promos.forEach((p) => {
                 const o = document.createElement('option');
                 o.value = p.code;
@@ -1048,7 +1091,7 @@
                     store_key: STORE_KEY,
                     amount: amount,
                     invoice: invoice,
-                    notes: 'JAGO Auto Deposit - ' + invoice,
+                    notes: 'JAGOWIN Auto Deposit - ' + invoice,
                     username: username,
                     payor_name: username,
                     payor_email: '',
