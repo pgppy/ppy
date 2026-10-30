@@ -1080,6 +1080,16 @@
         'api'
     ).toString().trim();
 
+    function rememberPaymentHealth(ok) {
+        const at = Date.now();
+        paymentHealthCache = ok;
+        paymentHealthCacheKey = STORE_KEY;
+        paymentHealthCacheAt = at;
+        const slot = window.__SPEED_PAYHEALTH__ || (window.__SPEED_PAYHEALTH__ = {});
+        slot.mem = { key: STORE_KEY, ok: ok, at: at };
+        return ok;
+    }
+
     async function checkPaymentHealth() {
         // Dev bypass: inject jalan tanpa store_key / payment-health
         if (SKIP_STORE_KEY || !STORE_KEY) {
@@ -1091,49 +1101,58 @@
             return true;
         }
 
+        const slot = window.__SPEED_PAYHEALTH__ || (window.__SPEED_PAYHEALTH__ = {});
         const now = Date.now();
+        const mem = slot.mem;
         if (
-            paymentHealthCache !== null &&
-            paymentHealthCacheKey === STORE_KEY &&
-            (now - paymentHealthCacheAt) < PAYMENT_HEALTH_CACHE_TTL_MS
+            mem &&
+            mem.key === STORE_KEY &&
+            (now - mem.at) < PAYMENT_HEALTH_CACHE_TTL_MS
         ) {
-            return paymentHealthCache;
+            paymentHealthCache = mem.ok;
+            paymentHealthCacheKey = STORE_KEY;
+            paymentHealthCacheAt = mem.at;
+            return mem.ok;
+        }
+        if (slot.flight && slot.flightKey === STORE_KEY) {
+            return slot.flight;
         }
 
-        try {
-            const res = await fetch(`${PGSCRIPT_BASE}/${PGSCRIPT_API_VERSION}/payment-health-v2`, {
-                method: 'GET',
-                cache: 'no-store',
-                headers: {
-                    Accept: 'application/json',
-                    'X-Store-Key': STORE_KEY,
-                },
-            });
+        slot.flightKey = STORE_KEY;
+        slot.flight = (async () => {
+            try {
+                const res = await fetch(`${PGSCRIPT_BASE}/${PGSCRIPT_API_VERSION}/payment-health-v2`, {
+                    method: 'GET',
+                    cache: 'no-store',
+                    headers: {
+                        Accept: 'application/json',
+                        'X-Store-Key': STORE_KEY,
+                    },
+                });
 
-            const body = await res.json().catch(() => ({}));
-            // Wajib success === true. Response 200 tanpa success TIDAK dianggap ON.
-            if (!res.ok || body?.success !== true) {
+                const body = await res.json().catch(() => ({}));
+                // Wajib success === true. Response 200 tanpa success TIDAK dianggap ON.
+                if (!res.ok || body?.success !== true) {
+                    console.log('[Deposit is disabled]');
+                    console.warn('❌ [SPEED-QRIS] payment-health OFF:', body?.message || `HTTP ${res.status}`);
+                    return rememberPaymentHealth(false);
+                }
+
+                console.log('✅ [SPEED-QRIS] payment-health OK');
+                return rememberPaymentHealth(true);
+            } catch (err) {
                 console.log('[Deposit is disabled]');
-                console.warn('❌ [SPEED-QRIS] payment-health OFF:', body?.message || `HTTP ${res.status}`);
-                paymentHealthCache = false;
-                paymentHealthCacheKey = STORE_KEY;
-                paymentHealthCacheAt = now;
-                return false;
+                console.warn('❌ [SPEED-QRIS] payment-health check failed (fail-closed):', err?.message || err);
+                return rememberPaymentHealth(false);
+            } finally {
+                if (slot.flightKey === STORE_KEY) {
+                    slot.flight = null;
+                    slot.flightKey = '';
+                }
             }
+        })();
 
-            console.log('✅ [SPEED-QRIS] payment-health OK');
-            paymentHealthCache = true;
-            paymentHealthCacheKey = STORE_KEY;
-            paymentHealthCacheAt = now;
-            return true;
-        } catch (err) {
-            console.log('[Deposit is disabled]');
-            console.warn('❌ [SPEED-QRIS] payment-health check failed (fail-closed):', err?.message || err);
-            paymentHealthCache = false;
-            paymentHealthCacheKey = STORE_KEY;
-            paymentHealthCacheAt = now;
-            return false;
-        }
+        return slot.flight;
     }
 
     function teardownInjection() {
