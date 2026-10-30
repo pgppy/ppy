@@ -40,7 +40,7 @@
     const CONFIG = {
         MIN_AMOUNT: 10000,
         MAX_AMOUNT: 10000000,
-        AMOUNT_BUTTONS: [10000, 20000, 100000, 200000, 500000, 1000000],
+        AMOUNT_BUTTONS: [10000, 20000, 30000, 40000, 50000, 100000, 200000, 500000, 1000000],
         MAX_RETRIES: 24,
         RETRY_DELAY: 400,
         IS_MOBILE: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent),
@@ -123,6 +123,11 @@
     CONFIG.AMOUNT_BUTTONS = parseButtonList(
         getParamFromCurrentScript('buttons') || getParamFromCurrentScript('amounts')
     ).filter((n) => n >= CONFIG.MIN_AMOUNT && n <= CONFIG.MAX_AMOUNT);
+    // Nominal minimum selalu jadi chip pertama (mis. min 20rb → tombol Rp 20.000).
+    if (CONFIG.AMOUNT_BUTTONS.indexOf(CONFIG.MIN_AMOUNT) === -1) {
+        CONFIG.AMOUNT_BUTTONS.unshift(CONFIG.MIN_AMOUNT);
+    }
+    CONFIG.AMOUNT_BUTTONS = Array.from(new Set(CONFIG.AMOUNT_BUTTONS)).sort((a, b) => a - b);
     if (!CONFIG.AMOUNT_BUTTONS.length) CONFIG.AMOUNT_BUTTONS = [CONFIG.MIN_AMOUNT];
 
     function formatRpLabel(n) {
@@ -804,6 +809,12 @@
                                 <input type="hidden" id="depositAmountAutoQris" value="">
                                 <small class="qris-input-hint">Min: ${formatRpLabel(CONFIG.MIN_AMOUNT)} | Max: ${formatRpLabel(CONFIG.MAX_AMOUNT)}</small>
                             </div>
+                            <div class="form-group" id="jg-promo-group" style="display:none;">
+                                <label for="depositPromotionAutoQris">Promo (Opsional)</label>
+                                <select class="qris-input" id="depositPromotionAutoQris">
+                                    <option value="">Tanpa promo</option>
+                                </select>
+                            </div>
                             <button type="submit" class="qris-submit-btn">
                                 <span id="qris-btn-text">Generate QR Code</span>
                             </button>
@@ -878,6 +889,110 @@
         return 'JAGO-' + Date.now().toString(36).toUpperCase() + rand;
     }
 
+    // Ambil daftar promo dari form deposit native JAGOWIN (select.promoList / #promo_event).
+    // Promo per-metode: mis. e-wallet punya "QRIS10JAGOWIN11", bank bisa kosong.
+    function nativeFetchHtml(url) {
+        return fetch(url, {
+            credentials: 'same-origin',
+            headers: { 'X-Requested-With': 'XMLHttpRequest', Accept: 'text/html, */*; q=0.01' },
+        }).then((r) => (r.ok ? r.text() : '')).catch(() => '');
+    }
+
+    function getCsrfToken() {
+        const meta = document.querySelector('meta[name="csrf-token"]');
+        if (meta && meta.content) return meta.content.trim();
+        const inp = document.querySelector('input[name="_token"]');
+        if (inp && inp.value) return inp.value.trim();
+        return '';
+    }
+
+    // Peta provider→pID (+ method) dari satu form deposit, dan token cadangan dari form.
+    function parseBankMap(html) {
+        const out = { banks: [], token: '' };
+        if (!html || html.indexOf('depositForm') === -1) return out;
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const tok = doc.querySelector('input[name="_token"]');
+        if (tok && tok.value) out.token = tok.value.trim();
+        doc.querySelectorAll('select.bank_list').forEach((s) => {
+            const method = s.getAttribute('data-type') || '';
+            s.querySelectorAll('option').forEach((o) => {
+                if (o.value && o.getAttribute('data-p_id')) {
+                    out.banks.push({ method, provider: o.value, pid: o.getAttribute('data-p_id') });
+                }
+            });
+        });
+        return out;
+    }
+
+    // POST /deposit-promo-details → daftar promo (promo_code, title, min, max) untuk 1 metode.
+    function fetchPromoDetails(token, method, provider, pid) {
+        const body = new URLSearchParams({
+            bank_id: provider, _token: token, method: String(method), lang: 'id', provider_id: pid,
+        }).toString();
+        return fetch('/deposit-promo-details', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' },
+            body,
+        }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    }
+
+    async function loadDepositPromos() {
+        try {
+            const sel = document.getElementById('depositPromotionAutoQris');
+            const grp = document.getElementById('jg-promo-group');
+            if (!sel || !grp) return;
+            const items = Array.from(document.querySelectorAll('.deposit .methods_form .payment-methods-items'))
+                .map((a) => ({ method: a.getAttribute('data-method'), provider: a.getAttribute('data-provider') }))
+                .filter((x) => x.method && x.provider);
+            if (!items.length) return;
+
+            // Satu form untuk peta provider→pID (semua metode) + token.
+            const first = items[0];
+            const map = parseBankMap(await nativeFetchHtml(
+                `/account/load_deposit_form?isgateway=0&method=${encodeURIComponent(first.method)}&provider=${encodeURIComponent(first.provider)}&pID=${encodeURIComponent(first.provider)}`
+            ));
+            const token = getCsrfToken() || map.token;
+            if (!token || !map.banks.length) return;
+
+            const promos = [];
+            const seenMethod = new Set();
+            for (const it of items) {
+                if (seenMethod.has(it.method)) continue;
+                seenMethod.add(it.method);
+                const bm = map.banks.find((b) => b.method === it.method && b.provider === it.provider)
+                    || map.banks.find((b) => b.method === it.method);
+                if (!bm) continue;
+                const json = await fetchPromoDetails(token, it.method, bm.provider, bm.pid);
+                const d = json && json.data;
+                if (!d || d.is_show_promo === false) continue;
+                (d.promotions || []).forEach((p) => {
+                    if (!p.promo_code || p.hide_promo === 1 || p.hide_promo === '1') return;
+                    if (promos.some((x) => x.code === p.promo_code)) return;
+                    promos.push({
+                        code: p.promo_code,
+                        title: (p.title || p.promo_code).trim(),
+                        min: parseInt(p.min, 10) || 0,
+                        max: parseInt(p.max, 10) || 0,
+                    });
+                });
+            }
+            if (!promos.length) return;
+            promos.forEach((p) => {
+                const o = document.createElement('option');
+                o.value = p.code;
+                o.textContent = p.min ? `${p.title} (min ${formatRpLabel(p.min)})` : p.title;
+                o.setAttribute('data-min', String(p.min));
+                o.setAttribute('data-max', String(p.max));
+                sel.appendChild(o);
+            });
+            grp.style.display = '';
+            console.log(LOG, 'Promo dimuat:', promos.map((p) => p.code).join(', '));
+        } catch (e) {
+            console.warn(LOG, 'load promo gagal:', e && e.message);
+        }
+    }
+
     function attachHandlers() {
         const form = document.getElementById('formDepositAutoQris');
         const amountShow = document.getElementById('depositShowAmountAutoQris');
@@ -891,6 +1006,7 @@
 
         fillUsernameField();
         attachAmountButtons();
+        loadDepositPromos();
 
         if (amountShow) {
             amountShow.addEventListener('input', function () {
@@ -924,7 +1040,9 @@
                 resultContainer.classList.add('active');
                 await new Promise((r) => setTimeout(r, 80));
                 const invoice = makeInvoiceId();
-                const payment = new window.QrisSDK({
+                const promoSel = document.getElementById('depositPromotionAutoQris');
+                const promoCode = promoSel && promoSel.value ? promoSel.value.trim() : '';
+                const sdkConfig = {
                     healthCheckEnabled: false,
                     storeKey: STORE_KEY,
                     store_key: STORE_KEY,
@@ -950,7 +1068,13 @@
                     onCancel: function () {
                         resetForm();
                     },
-                });
+                };
+                if (promoCode) {
+                    sdkConfig.promotion = promoCode;
+                    sdkConfig.promo_code = promoCode;
+                    console.log(LOG, 'Promo dipakai:', promoCode);
+                }
+                const payment = new window.QrisSDK(sdkConfig);
                 payment.openPayment();
             } catch (err) {
                 console.error('❌', LOG, err);
