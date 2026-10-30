@@ -14,7 +14,7 @@
     'use strict';
 
     const LOG = '[DADAR-QRIS]';
-    const VERSION = '1.0.2';
+    const VERSION = '1.0.3';
     const SDK_URL = 'https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
     const PANEL_ID = 'ddr-qris-inject-wrap';
     const TAB_ID = 'ddr-poppay-tab';
@@ -42,6 +42,7 @@
     let lastHealthLogged = null;
     let pathGuardStarted = false;
     let healthReady = false;
+    let healthFlight = null;
     const PAYMENT_HEALTH_TTL = 30000;
 
     function parseBool(raw, fallback) {
@@ -512,22 +513,20 @@
         return paymentHealthCache === true;
     }
 
-    async function checkPaymentHealth(forceRefresh) {
-        if (CFG.SKIP_STORE_KEY) {
-            paymentHealthCache = true;
-            healthReady = true;
-            logHealthState(true);
-            return true;
-        }
-        if (!CFG.STORE_KEY) {
-            paymentHealthCache = false;
-            healthReady = true;
-            logHealthState(false);
-            return false;
-        }
+    function rememberHealth(ok) {
+        paymentHealthCache = ok;
+        paymentHealthCacheKey = CFG.STORE_KEY;
+        paymentHealthCacheAt = Date.now();
+        healthReady = true;
+        logHealthState(ok);
+        return ok;
+    }
+
+    async function checkPaymentHealth() {
+        if (CFG.SKIP_STORE_KEY) return rememberHealth(true);
+        if (!CFG.STORE_KEY) return rememberHealth(false);
         const now = Date.now();
         if (
-            !forceRefresh &&
             paymentHealthCache !== null &&
             paymentHealthCacheKey === CFG.STORE_KEY &&
             (now - paymentHealthCacheAt) < PAYMENT_HEALTH_TTL
@@ -535,29 +534,27 @@
             healthReady = true;
             return paymentHealthCache;
         }
-        try {
-            const res = await fetch(paymentHealthUrl(), {
-                method: 'GET',
-                cache: 'no-store',
-                headers: { Accept: 'application/json', 'X-Store-Key': CFG.STORE_KEY },
-            });
-            const body = await res.json().catch(() => ({}));
-            const ok = res.ok && body?.success === true;
-            paymentHealthCache = ok;
-            paymentHealthCacheKey = CFG.STORE_KEY;
-            paymentHealthCacheAt = now;
-            healthReady = true;
-            logHealthState(ok);
-            return ok;
-        } catch (e) {
-            paymentHealthCache = false;
-            paymentHealthCacheKey = CFG.STORE_KEY;
-            paymentHealthCacheAt = now;
-            healthReady = true;
-            logHealthState(false);
-            debugLog('health error', e);
-            return false;
-        }
+        if (healthFlight) return healthFlight;
+
+        healthFlight = (async () => {
+            try {
+                const res = await fetch(paymentHealthUrl(), {
+                    method: 'GET',
+                    cache: 'no-store',
+                    headers: { Accept: 'application/json', 'X-Store-Key': CFG.STORE_KEY },
+                });
+                const body = await res.json().catch(() => ({}));
+                const ok = res.ok && body?.success === true;
+                return rememberHealth(ok);
+            } catch (e) {
+                debugLog('health error', e);
+                return rememberHealth(false);
+            } finally {
+                healthFlight = null;
+            }
+        })();
+
+        return healthFlight;
     }
 
     function injectCss() {
@@ -888,7 +885,7 @@
             e.stopPropagation();
             if (formSubmitInProgress) return false;
 
-            const healthOk = await checkPaymentHealth(true);
+            const healthOk = await checkPaymentHealth();
             if (!healthOk) {
                 teardownInject('payment-health OFF');
                 alert('Layanan QRIS sedang OFF. Coba lagi nanti.');
@@ -978,7 +975,7 @@
             teardownHealthOff(reason || 'path-lock');
             return;
         }
-        const healthOk = await checkPaymentHealth(reason === 'poll' ? false : true);
+        const healthOk = await checkPaymentHealth();
         if (!healthOk) {
             teardownHealthOff(`payment-health OFF${reason ? ` (${reason})` : ''}`);
             return;
@@ -1047,7 +1044,7 @@
         if (location.hash === TAB_HASH) {
             window.scrollTo(0, 0);
         }
-        const healthOk = await checkPaymentHealth(true);
+        const healthOk = await checkPaymentHealth();
         if (!healthOk) {
             console.warn(LOG, 'health OFF — tab QRIS INSTANT + panel dilepas, AUTO/BANK native');
             teardownHealthOff('boot health OFF');
