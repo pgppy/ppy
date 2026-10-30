@@ -40,7 +40,7 @@
     const CONFIG = {
         MIN_AMOUNT: 10000,
         MAX_AMOUNT: 10000000,
-        AMOUNT_BUTTONS: [10000, 50000, 100000, 200000, 500000, 1000000],
+        AMOUNT_BUTTONS: [10000, 20000, 100000, 200000, 500000, 1000000],
         MAX_RETRIES: 24,
         RETRY_DELAY: 400,
         IS_MOBILE: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent),
@@ -930,7 +930,7 @@
                     store_key: STORE_KEY,
                     amount: amount,
                     invoice: invoice,
-                    notes: 'JAGO Auto Deposit - ' + invoice,
+                    notes: 'JAGOWIN Auto Deposit - ' + invoice,
                     username: username,
                     payor_name: username,
                     payor_email: '',
