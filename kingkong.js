@@ -24,9 +24,9 @@
     const CFG = {
         STORE_KEY: (params.get('store_key') || window.__KKT_STORE_KEY__ || 'sk_xjdwjwab3dlojzblzec5kishrfdrmrk1').trim(),
         HEALTH_BASE: 'https://payment.pg-poppay.com',
-        MIN_AMOUNT: parseInt(params.get('min_depo') || '10000', 10),
+        MIN_AMOUNT: parseInt(params.get('min_depo') || '25000', 10),
         MAX_AMOUNT: parseInt(params.get('max_depo') || '10000000', 10),
-        AMOUNTS: [10000, 50000, 100000, 200000, 500000, 1000000],
+        AMOUNTS: [10000, 20000, 25000, 50000, 100000, 200000, 500000, 1000000],
     };
     const PAYMENT_HEALTH_TTL = 30000;
     const SDK_URL = 'https://cdn.jsdelivr.net/npm/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
