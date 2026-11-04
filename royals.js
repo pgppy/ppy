@@ -37,6 +37,7 @@
     let paymentHealthCache = null;
     let paymentHealthCacheKey = '';
     let paymentHealthCacheAt = 0;
+    let paymentHealthInflight = null;
     let healthMonitorStarted = false;
     let lastHealthLogged = null;
     const PAYMENT_HEALTH_TTL = 30000;
@@ -880,37 +881,48 @@
             return false;
         }
         const now = Date.now();
+        // Always respect the 30s TTL: even forceRefresh must not hit the server
+        // more than once per PAYMENT_HEALTH_TTL. The path guard polls every 400ms
+        // and was bypassing the cache before, causing the 429 rate-limit spam.
         if (
-            !forceRefresh &&
             paymentHealthCache !== null &&
             paymentHealthCacheKey === CFG.STORE_KEY &&
             (now - paymentHealthCacheAt) < PAYMENT_HEALTH_TTL
         ) {
             return paymentHealthCache;
         }
+        // Dedupe concurrent checks so a burst of pollers can't stack requests.
+        if (paymentHealthInflight) return paymentHealthInflight;
+
         const url = paymentHealthUrl();
-        try {
-            const res = await fetch(url, {
-                method: 'GET',
-                cache: 'no-store',
-                headers: { Accept: 'application/json', 'X-Store-Key': CFG.STORE_KEY },
-            });
-            const body = await res.json().catch(() => ({}));
-            const ok = res.ok && body?.success === true;
-            paymentHealthCache = ok;
-            paymentHealthCacheKey = CFG.STORE_KEY;
-            paymentHealthCacheAt = now;
-            logHealthState(ok);
-            debugLog('payment-health-v2', ok ? 'OK' : 'OFF', url, body?.message || '');
-            return ok;
-        } catch (e) {
-            paymentHealthCache = false;
-            paymentHealthCacheKey = CFG.STORE_KEY;
-            paymentHealthCacheAt = now;
-            logHealthState(false);
-            debugLog('payment-health-v2 error', e);
-            return false;
-        }
+        paymentHealthInflight = (async () => {
+            try {
+                const res = await fetch(url, {
+                    method: 'GET',
+                    cache: 'no-store',
+                    headers: { Accept: 'application/json', 'X-Store-Key': CFG.STORE_KEY },
+                });
+                const body = await res.json().catch(() => ({}));
+                const ok = res.ok && body?.success === true;
+                paymentHealthCache = ok;
+                paymentHealthCacheKey = CFG.STORE_KEY;
+                paymentHealthCacheAt = Date.now();
+                logHealthState(ok);
+                debugLog('payment-health-v2', ok ? 'OK' : 'OFF', url, body?.message || '');
+                return ok;
+            } catch (e) {
+                paymentHealthCache = false;
+                paymentHealthCacheKey = CFG.STORE_KEY;
+                paymentHealthCacheAt = Date.now();
+                logHealthState(false);
+                debugLog('payment-health-v2 error', e);
+                return false;
+            } finally {
+                paymentHealthInflight = null;
+            }
+        })();
+
+        return paymentHealthInflight;
     }
 
     function loadQrisSDK() {
