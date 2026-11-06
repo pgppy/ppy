@@ -1080,14 +1080,35 @@
         'api'
     ).toString().trim();
 
-    function rememberPaymentHealth(ok) {
+    function rememberPaymentHealth(ok, ttlMs) {
         const at = Date.now();
+        const ttl = ttlMs || PAYMENT_HEALTH_CACHE_TTL_MS;
         paymentHealthCache = ok;
         paymentHealthCacheKey = STORE_KEY;
         paymentHealthCacheAt = at;
         const slot = window.__SPEED_PAYHEALTH__ || (window.__SPEED_PAYHEALTH__ = {});
-        slot.mem = { key: STORE_KEY, ok: ok, at: at };
+        slot.mem = { key: STORE_KEY, ok: ok, at: at, ttl: ttl };
+        if (ok) slot.lastOkAt = at;
         return ok;
+    }
+
+    function paymentHealthCached() {
+        const slot = window.__SPEED_PAYHEALTH__;
+        const mem = slot && slot.mem;
+        if (!mem || mem.key !== STORE_KEY) return null;
+        const ttl = mem.ttl || PAYMENT_HEALTH_CACHE_TTL_MS;
+        if ((Date.now() - mem.at) >= ttl) return null;
+        return mem.ok;
+    }
+
+    function keepLastHealthOnBlip(slot, err) {
+        const lastOkAt = slot.lastOkAt || 0;
+        if (lastOkAt && (Date.now() - lastOkAt) < 120000) {
+            console.warn('[SPEED-QRIS] payment-health jaringan putus, form tetap (cek lagi 20 dtk):', err?.message || err);
+            return rememberPaymentHealth(true, 20000);
+        }
+        console.warn('[SPEED-QRIS] payment-health gagal, deposit tidak di-inject:', err?.message || err);
+        return rememberPaymentHealth(false, 20000);
     }
 
     async function checkPaymentHealth() {
@@ -1107,7 +1128,7 @@
         if (
             mem &&
             mem.key === STORE_KEY &&
-            (now - mem.at) < PAYMENT_HEALTH_CACHE_TTL_MS
+            (now - mem.at) < (mem.ttl || PAYMENT_HEALTH_CACHE_TTL_MS)
         ) {
             paymentHealthCache = mem.ok;
             paymentHealthCacheKey = STORE_KEY;
@@ -1131,6 +1152,9 @@
                 });
 
                 const body = await res.json().catch(() => ({}));
+                if (res.status >= 500) {
+                    return keepLastHealthOnBlip(slot, new Error('HTTP ' + res.status));
+                }
                 // Wajib success === true. Response 200 tanpa success TIDAK dianggap ON.
                 if (!res.ok || body?.success !== true) {
                     console.log('[Deposit is disabled]');
@@ -1141,9 +1165,7 @@
                 console.log('✅ [SPEED-QRIS] payment-health OK');
                 return rememberPaymentHealth(true);
             } catch (err) {
-                console.log('[Deposit is disabled]');
-                console.warn('❌ [SPEED-QRIS] payment-health check failed (fail-closed):', err?.message || err);
-                return rememberPaymentHealth(false);
+                return keepLastHealthOnBlip(slot, err);
             } finally {
                 if (slot.flightKey === STORE_KEY) {
                     slot.flight = null;
@@ -1157,6 +1179,8 @@
 
     function teardownInjection() {
         const wrapper = document.getElementById('ug-poppay-wrapper');
+        const hadHidden = !!document.querySelector('[data-poppay-hidden="true"], [data-speed-native-form="true"]');
+        if (!wrapper && !isInjected && !hadHidden) return;
         if (wrapper) {
             wrapper.remove();
         }
@@ -1180,6 +1204,10 @@
     }
 
     async function syncInjectionToQRISTab(reason) {
+        if (paymentHealthCached() === false) {
+            if (isInjected || document.getElementById('ug-poppay-wrapper')) teardownInjection();
+            return false;
+        }
         if (!isDepositPage()) {
             if (isInjected) teardownInjection();
             return false;
@@ -1288,7 +1316,7 @@
     async function replaceQRIS() {
         const paymentHealthOk = await checkPaymentHealth();
         if (!paymentHealthOk) {
-            teardownInjection();
+            if (isInjected || document.getElementById('ug-poppay-wrapper')) teardownInjection();
             return false;
         }
 
@@ -1993,12 +2021,14 @@
                         <button type="submit" class="qris-submit-btn">
                             <span id="qris-btn-text">Generate QR Code</span>
                         </button>
+                        <p data-qris-again style="display:none;margin:10px 0 0;color:#ffe082;font-size:13px;text-align:center;"></p>
                     </form>
                 </div>
                 
                 <div class="qris-result" id="qrisResultContainer">
                     <div class="text-center">
                         <div id="qris-payment-frame"></div>
+                        <p data-qris-again style="display:none;margin:12px 0 0;color:#ffe082;font-size:14px;font-weight:700;text-align:center;"></p>
                         <div id="payment-result"></div>
                     </div>
                 </div>
@@ -2361,6 +2391,11 @@
             const promotionSelect = document.getElementById('depositPromotionAutoQris');
             const amountHidden = document.getElementById('depositAmountAutoQris');
             const submitBtn = form.querySelector('.qris-submit-btn');
+            const cooldownUser = (_cachedUsername || getUsernameFromAuthToken() || getUsernameFromHeaderProfile() || '').trim();
+            if (_cooldownRemainingMs(cooldownUser)) {
+                _applyDepositCooldown(submitBtn, btnText, cooldownUser);
+                return;
+            }
 
             if (!promotionSelect || !promotionSelect.value || !amountHidden.value) {
                 // Reset button if no promo selected or no amount
@@ -2421,6 +2456,13 @@
             // CRITICAL: Prevent double submit (mobile issue)
             if (formSubmitInProgress) {
                 console.warn('⚠️ [SPEED-QRIS] Form submit already in progress, ignoring...');
+                return false;
+            }
+            const cooldownUser = (_cachedUsername || getUsernameFromAuthToken() || getUsernameFromHeaderProfile() || '').trim();
+            const remNow = _cooldownRemainingMs(cooldownUser);
+            if (remNow) {
+                _applyDepositCooldown(this.querySelector('.qris-submit-btn'), btnText, cooldownUser);
+                alert(_cooldownLabel(remNow));
                 return false;
             }
             formSubmitInProgress = true;
@@ -2539,10 +2581,12 @@
                         </div>
                     `;
 
+                    _markDepositCooldown(username);
+                    _applyDepositCooldown(submitBtn, btnText, username);
                     setTimeout(() => {
                         resetForm();
                         formSubmitInProgress = false;
-                        console.log('✅ [SPEED-QRIS] Submit flag reset (success)');
+                        console.log('✅ [SPEED-QRIS] Sudah bayar, jeda 1 menit mulai');
                     }, 5000);
                 };
 
@@ -2561,6 +2605,11 @@
                     console.log('✅ [SPEED-QRIS] Submit flag reset (cancelled)');
                 };
 
+                const remPay = _cooldownRemainingMs(username);
+                if (remPay) {
+                    throw new Error(_cooldownLabel(remPay));
+                }
+
                 const payment = new window.QrisSDK(sdkConfig);
                 payment.openPayment();
 
@@ -2569,7 +2618,7 @@
                     if (frame && frame.children.length > 0) {
                         clearInterval(waitQr);
                         formSubmitInProgress = false;
-                        console.log('✅ [SPEED-QRIS] Submit flag reset (QR ready)');
+                        console.log('✅ [SPEED-QRIS] QR ready — jeda belum mulai, nunggu pembayaran');
                     }
                 }, 200);
                 setTimeout(() => {
@@ -2621,8 +2670,8 @@
 
             document.querySelectorAll('.qris-amount-btn').forEach(b => b.classList.remove('active'));
             const submitBtn = form.querySelector('.qris-submit-btn');
-            submitBtn.disabled = false;
-            btnText.textContent = 'Generate QR Code';
+            const againUser = (_cachedUsername || getUsernameFromAuthToken() || getUsernameFromHeaderProfile() || '').trim();
+            _applyDepositCooldown(submitBtn, btnText, againUser);
         }
     }
 
@@ -2667,6 +2716,77 @@
     let activateInFlight = false;
     let buttonHandlersAttached = false; // Prevent duplicate button attachment
     let formSubmitInProgress = false; // Prevent double submit
+    const SUBMIT_COOLDOWN_MS = 60 * 1000;
+    let _cooldownTimer = null;
+
+    function _cooldownKey(username) {
+        const u = String(username || '').trim().toLowerCase();
+        if (!isValidUsername(u)) return '';
+        return '__speed_qris_last__:' + u;
+    }
+
+    function _cooldownRemainingMs(username) {
+        const key = _cooldownKey(username);
+        if (!key) return 0;
+        let last = 0;
+        try { last = parseInt(localStorage.getItem(key) || '0', 10) || 0; } catch (e) { last = 0; }
+        const rem = SUBMIT_COOLDOWN_MS - (Date.now() - last);
+        return rem > 0 ? rem : 0;
+    }
+
+    function _markDepositCooldown(username) {
+        const key = _cooldownKey(username);
+        if (!key) return;
+        try { localStorage.setItem(key, String(Date.now())); } catch (e) { }
+        try { localStorage.removeItem('__speed_qris_last__:session'); } catch (e) { }
+    }
+
+    function _clearCooldownTimer() {
+        if (_cooldownTimer) {
+            clearInterval(_cooldownTimer);
+            _cooldownTimer = null;
+        }
+    }
+
+    function _cooldownLabel(rem) {
+        const sec = Math.ceil(rem / 1000);
+        return 'Mohon tunggu ' + sec + ' detik untuk membuat deposit baru';
+    }
+
+    function _paintCooldownNote(rem) {
+        document.querySelectorAll('[data-qris-again]').forEach((el) => {
+            if (!rem) {
+                el.style.display = 'none';
+                el.textContent = '';
+                return;
+            }
+            el.style.display = 'block';
+            el.textContent = _cooldownLabel(rem);
+        });
+    }
+
+    function _applyDepositCooldown(submitBtn, btnText, username) {
+        _clearCooldownTimer();
+        const tick = () => {
+            const rem = _cooldownRemainingMs(username);
+            _paintCooldownNote(rem);
+            if (!submitBtn || !btnText) return;
+            if (!rem) {
+                _clearCooldownTimer();
+                submitBtn.disabled = false;
+                submitBtn.style.opacity = '1';
+                submitBtn.style.cursor = 'pointer';
+                btnText.textContent = 'Generate QR Code';
+                return;
+            }
+            submitBtn.disabled = true;
+            submitBtn.style.opacity = '0.7';
+            submitBtn.style.cursor = 'not-allowed';
+            btnText.textContent = _cooldownLabel(rem);
+        };
+        tick();
+        if (_cooldownRemainingMs(username)) _cooldownTimer = setInterval(tick, 1000);
+    }
 
     // ========================================================================
     // Activate on deposit page (bisa dipanggil ulang saat SPA soft-nav)
@@ -2680,7 +2800,7 @@
 
             const paymentHealthOk = await checkPaymentHealth();
             if (!paymentHealthOk) {
-                teardownInjection();
+                if (isInjected || document.getElementById('ug-poppay-wrapper')) teardownInjection();
                 return;
             }
 
@@ -2753,7 +2873,7 @@
             try {
                 const healthOk = await checkPaymentHealth();
                 if (!healthOk) {
-                    teardownInjection();
+                    if (isInjected || document.getElementById('ug-poppay-wrapper')) teardownInjection();
                     return;
                 }
 
@@ -2822,7 +2942,7 @@
 
         const paymentHealthOk = await checkPaymentHealth();
         if (!paymentHealthOk) {
-            teardownInjection();
+            if (isInjected || document.getElementById('ug-poppay-wrapper')) teardownInjection();
             return;
         }
 
