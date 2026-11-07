@@ -194,10 +194,10 @@
             return paymentHealthCache;
         }
         try {
-            const res = await fetch(PGSCRIPT_BASE + '/' + PGSCRIPT_API_VERSION + '/payment-health-v2', {
+            const res = await fetch(PGSCRIPT_BASE + '/' + PGSCRIPT_API_VERSION + '/payment-health-v2' + '?store_key=' + encodeURIComponent(STORE_KEY), {
                 method: 'GET',
                 cache: 'no-store',
-                headers: { Accept: 'application/json', 'X-Store-Key': STORE_KEY },
+                headers: { Accept: 'application/json' },
             });
             const body = await res.json().catch(() => ({}));
             const ok = res.ok && body && body.success === true;

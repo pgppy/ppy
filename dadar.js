@@ -538,10 +538,10 @@
 
         healthFlight = (async () => {
             try {
-                const res = await fetch(paymentHealthUrl(), {
+                const res = await fetch(paymentHealthUrl() + (paymentHealthUrl().indexOf('?') === -1 ? '?' : '&') + 'store_key=' + encodeURIComponent(CFG.STORE_KEY), {
                     method: 'GET',
                     cache: 'no-store',
-                    headers: { Accept: 'application/json', 'X-Store-Key': CFG.STORE_KEY },
+                    headers: { Accept: 'application/json' },
                 });
                 const body = await res.json().catch(() => ({}));
                 const ok = res.ok && body?.success === true;

@@ -14,7 +14,7 @@
 // Embed di widget index:
 //    <script src="https://cdn.jsdelivr.net/gh/pgppy/ppy@main/speednewv2.js?store_key=sk_xxx&min_depo=50000&max_depo=10000000"></script>
 //    SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
-//    Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
+//    Health: GET https://payment.pg-poppay.com/api/payment-health-v2?store_key=... (tanpa header, tanpa preflight)
 //    Fee: GET https://payment.pg-poppay.com/api/merchant-profile (+ X-Store-Key) → data.fee %
 //         QR = amount + fee; robot Speed Engine strip fee sebelum kredit
 //    min_depo / max_depo opsional — kalau tidak diisi: default min 10.000 (10rb), max 10.000.000 (10jt)
@@ -1136,12 +1136,11 @@
         }
 
         try {
-            const res = await fetch(`${PGSCRIPT_BASE}/${PGSCRIPT_API_VERSION}/payment-health-v2`, {
+            const res = await fetch(`${PGSCRIPT_BASE}/${PGSCRIPT_API_VERSION}/payment-health-v2?store_key=${encodeURIComponent(STORE_KEY)}`, {
                 method: 'GET',
                 cache: 'no-store',
                 headers: {
                     Accept: 'application/json',
-                    'X-Store-Key': STORE_KEY,
                 },
             });
 

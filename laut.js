@@ -2,7 +2,7 @@
 // UG QRIS POPPAY INJECTION - ugv6.js
 // BOB RESEARCH LABS - v6.0.8 (username /profile|/ajaxProfile fallback)
 // SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
-// Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
+// Health: GET https://payment.pg-poppay.com/api/payment-health-v2?store_key=... (tanpa header, tanpa preflight)
 // Embed: <script src="...ugv6.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000&buttons=10000,50000,100000,500000"></script>
 // Username: #pageContent .mb-2 → memberId → Qwik user_name → GET /profile atau /ajaxProfile
 // Theme: jajanwin pink default; spinlaut/lautspin ocean (dark + biru site) — form z-index rendah supaya popup QRIS site/SDK di atas
@@ -527,12 +527,11 @@
         }
 
         try {
-            const res = await fetch(`${PGSCRIPT_BASE}/${PGSCRIPT_API_VERSION}/payment-health-v2`, {
+            const res = await fetch(`${PGSCRIPT_BASE}/${PGSCRIPT_API_VERSION}/payment-health-v2?store_key=${encodeURIComponent(STORE_KEY)}`, {
                 method: 'GET',
                 cache: 'no-store',
                 headers: {
                     Accept: 'application/json',
-                    'X-Store-Key': STORE_KEY,
                 },
             });
 

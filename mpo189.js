@@ -652,7 +652,7 @@ console.log('[INJECT] ✅ On deposit/transaction page, proceeding with injection
   // ===================================================================
   // PGScript gate — store_key + payment-health-v2 (fail-closed)
   // SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
-  // Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
+  // Health: GET https://payment.pg-poppay.com/api/payment-health-v2?store_key=... (tanpa header, tanpa preflight)
   // Embed: <script src="...mpoinstantv4.js?store_key=sk_...">
   // ===================================================================
   let paymentHealthCache = null;
@@ -751,12 +751,11 @@ console.log('[INJECT] ✅ On deposit/transaction page, proceeding with injection
     }
 
     try {
-      const res = await fetch(`${HEALTH_BASE}/${HEALTH_API_VERSION}/payment-health-v2`, {
+      const res = await fetch(`${HEALTH_BASE}/${HEALTH_API_VERSION}/payment-health-v2?store_key=${encodeURIComponent(STORE_KEY)}`, {
         method: 'GET',
         cache: 'no-store',
         headers: {
           Accept: 'application/json',
-          'X-Store-Key': STORE_KEY,
         },
       });
 

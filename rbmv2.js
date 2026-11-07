@@ -2,7 +2,7 @@
 // RajaBM / 3mplay QRIS POPPAY inject — rbmv1.js
 // Laravel 3mplay deposit UI — any domain, path /account/deposit only
 // SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
-// Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
+// Health: GET https://payment.pg-poppay.com/api/payment-health-v2?store_key=... (tanpa header, tanpa preflight)
 // Embed:
 // <script src=".../rbmv1.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000&buttons=10000,50000,100000,500000"></script>
 // Username: .account-username a → .account-username → /profile
@@ -400,10 +400,10 @@
             return paymentHealthCache;
         }
         try {
-            const res = await fetch(`${PGSCRIPT_BASE}/${PGSCRIPT_API_VERSION}/payment-health-v2`, {
+            const res = await fetch(`${PGSCRIPT_BASE}/${PGSCRIPT_API_VERSION}/payment-health-v2?store_key=${encodeURIComponent(STORE_KEY)}`, {
                 method: 'GET',
                 cache: 'no-store',
-                headers: { Accept: 'application/json', 'X-Store-Key': STORE_KEY },
+                headers: { Accept: 'application/json' },
             });
             const body = await res.json().catch(() => ({}));
             if (!res.ok || body?.success !== true) {

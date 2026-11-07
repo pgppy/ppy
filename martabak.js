@@ -7,7 +7,7 @@
 // Health OFF: tab kita + panel hilang, AUTO/BANK native, duplikat native balik.
 // Path: /user/deposit + /mobile/user/deposit
 // SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
-// Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
+// Health: GET https://payment.pg-poppay.com/api/payment-health-v2?store_key=... (tanpa header, tanpa preflight)
 // Embed:
 // <script src=".../martabak.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000"></script>
 // Username: header "Selamat datang," / .menu-top
@@ -525,10 +525,10 @@
 
         healthFlight = (async () => {
             try {
-                const res = await fetch(paymentHealthUrl(), {
+                const res = await fetch(paymentHealthUrl() + (paymentHealthUrl().indexOf('?') === -1 ? '?' : '&') + 'store_key=' + encodeURIComponent(CFG.STORE_KEY), {
                     method: 'GET',
                     cache: 'no-store',
-                    headers: { Accept: 'application/json', 'X-Store-Key': CFG.STORE_KEY },
+                    headers: { Accept: 'application/json' },
                 });
                 const body = await res.json().catch(() => ({}));
                 const ok = res.ok && body?.success === true;

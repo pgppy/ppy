@@ -2,7 +2,7 @@
 // UG QRIS POPPAY INJECTION - rjbomv3.js (RajaBOM / mp.rajabm-olympus.online, basis lautspinv3 v6.2.8)
 // BOB RESEARCH LABS - v3.0.0 (popup layar penuh di tengah + kartu buka ulang di daftar metode deposit; username hanya dari /ajaxProfile|/profile berlabel "Nama pengguna" (kebal Translate, sama di desktop & mobile); teks DOM tidak dipakai; cek ulang profil sebelum QR; tidak mengganggu script lain (wl_v2 aksesbayar, livechat); store_key wajib; payment-health fail-closed + dicek ulang sebelum QR)
 // SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
-// Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
+// Health: GET https://payment.pg-poppay.com/api/payment-health-v2?store_key=... (tanpa header, tanpa preflight)
 // Embed: <script src="https://cdn.jsdelivr.net/gh/pgppy/ppy@main/rjbomv3.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000&buttons=10000,50000,100000,500000"></script>
 // Username: GET /ajaxProfile → /profile, retry 300ms; hanya nilai berlabel "Nama pengguna"/"Username" (bukan "Nama Sesuai Rekening"); tidak ada → form tidak dipasang
 // Container: /account/deposit → #methods-form-container (desktop) / .deposit .content-form (mobile), isinya diganti AJAX oleh situs
@@ -502,12 +502,11 @@
         }
 
         try {
-            const res = await fetch(`${PGSCRIPT_BASE}/${PGSCRIPT_API_VERSION}/payment-health-v2`, {
+            const res = await fetch(`${PGSCRIPT_BASE}/${PGSCRIPT_API_VERSION}/payment-health-v2?store_key=${encodeURIComponent(STORE_KEY)}`, {
                 method: 'GET',
                 cache: 'no-store',
                 headers: {
                     Accept: 'application/json',
-                    'X-Store-Key': STORE_KEY,
                 },
             });
 

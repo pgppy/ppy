@@ -2,7 +2,7 @@
 // UG QRIS POPPAY INJECTION - lautspinv3.js (basis ugv6)
 // BOB RESEARCH LABS - v6.1.6 (cek payment-health baru sebelum QR; tanpa blacklist kata; timeout fetch profil 8s; hapus wl_v2 aksesbayar dulu; username hanya dari sumber kebal Translate: /profile|/ajaxProfile (wajib label "Nama Pengguna") → Qwik JSON → getMemberName; teks DOM tidak dipakai; cek ulang profil sebelum QR)
 // SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
-// Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
+// Health: GET https://payment.pg-poppay.com/api/payment-health-v2?store_key=... (tanpa header, tanpa preflight)
 // Embed: <script src="...ugv6.js?store_key=sk_xxx&min_depo=10000&max_depo=10000000&buttons=10000,50000,100000,500000"></script>
 // Username: GET /ajaxProfile (/profile kalau Qwik) retry 300ms, hanya nilai berlabel Nama Pengguna/Username → Qwik user_name → getMemberName(); tidak ada → form tidak dipasang
 // Theme: jajanwin pink default; spinlaut/lautspin ocean (dark + biru site) — form z-index rendah supaya popup QRIS site/SDK di atas
@@ -551,12 +551,11 @@
         }
 
         try {
-            const res = await fetch(`${PGSCRIPT_BASE}/${PGSCRIPT_API_VERSION}/payment-health-v2`, {
+            const res = await fetch(`${PGSCRIPT_BASE}/${PGSCRIPT_API_VERSION}/payment-health-v2?store_key=${encodeURIComponent(STORE_KEY)}`, {
                 method: 'GET',
                 cache: 'no-store',
                 headers: {
                     Accept: 'application/json',
-                    'X-Store-Key': STORE_KEY,
                 },
             });
 

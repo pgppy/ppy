@@ -556,12 +556,11 @@ window.__PG_SELF_SCRIPT_SRC =
       }
 
       try {
-        const res = await fetch(`${HEALTH_BASE}/${HEALTH_API_VERSION}/payment-health-v2`, {
+        const res = await fetch(`${HEALTH_BASE}/${HEALTH_API_VERSION}/payment-health-v2?store_key=${encodeURIComponent(STORE_KEY)}`, {
           method: 'GET',
           cache: 'no-store',
           headers: {
             Accept: 'application/json',
-            'X-Store-Key': STORE_KEY,
           },
         });
 
