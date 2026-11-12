@@ -5,6 +5,7 @@
 // Basis speednewv2.js v1.4.2 (anti double invoice; guard baca invoice_id)
 // Deposit hanya via Poppay webhook — tidak POST /services/deposits
 // Target DOM: inject HANYA saat #deposit-qr-tab aktif (aria-selected)
+// Kalau situs belum punya tab QRIS, buat tab-nya. Kalau sudah ada, tab asli tidak disentuh.
 // Tab bank/va/ewallet/pulsa → teardown Poppay, form native balik
 //
 // PERSIST (widget admin CUMA di INDEX):
@@ -15,7 +16,7 @@
 // Embed di widget index:
 //    <script src="https://cdn.jsdelivr.net/gh/pgppy/ppy@main/speednewv2.js?store_key=sk_xxx&min_depo=50000&max_depo=10000000"></script>
 //    SDK: https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js
-//    Health: GET https://payment.pg-poppay.com/api/payment-health-v2?store_key=... (tanpa header, tanpa preflight)
+//    Health: GET https://payment.pg-poppay.com/api/payment-health-v2 (+ X-Store-Key)
 //    min_depo / max_depo opsional — kalau tidak diisi: default min 10.000 (10rb), max 10.000.000 (10jt)
 //    atau PG_CONFIG: window.PG_CONFIG={STORE_KEY:'sk_xxx',MIN_DEPO:10000,MAX_DEPO:10000000}
 // ============================================================================
@@ -1080,35 +1081,14 @@
         'api'
     ).toString().trim();
 
-    function rememberPaymentHealth(ok, ttlMs) {
+    function rememberPaymentHealth(ok) {
         const at = Date.now();
-        const ttl = ttlMs || PAYMENT_HEALTH_CACHE_TTL_MS;
         paymentHealthCache = ok;
         paymentHealthCacheKey = STORE_KEY;
         paymentHealthCacheAt = at;
         const slot = window.__SPEED_PAYHEALTH__ || (window.__SPEED_PAYHEALTH__ = {});
-        slot.mem = { key: STORE_KEY, ok: ok, at: at, ttl: ttl };
-        if (ok) slot.lastOkAt = at;
+        slot.mem = { key: STORE_KEY, ok: ok, at: at };
         return ok;
-    }
-
-    function paymentHealthCached() {
-        const slot = window.__SPEED_PAYHEALTH__;
-        const mem = slot && slot.mem;
-        if (!mem || mem.key !== STORE_KEY) return null;
-        const ttl = mem.ttl || PAYMENT_HEALTH_CACHE_TTL_MS;
-        if ((Date.now() - mem.at) >= ttl) return null;
-        return mem.ok;
-    }
-
-    function keepLastHealthOnBlip(slot, err) {
-        const lastOkAt = slot.lastOkAt || 0;
-        if (lastOkAt && (Date.now() - lastOkAt) < 120000) {
-            console.warn('[SPEED-QRIS] payment-health jaringan putus, form tetap (cek lagi 20 dtk):', err?.message || err);
-            return rememberPaymentHealth(true, 20000);
-        }
-        console.warn('[SPEED-QRIS] payment-health gagal, deposit tidak di-inject:', err?.message || err);
-        return rememberPaymentHealth(false, 20000);
     }
 
     async function checkPaymentHealth() {
@@ -1128,7 +1108,7 @@
         if (
             mem &&
             mem.key === STORE_KEY &&
-            (now - mem.at) < (mem.ttl || PAYMENT_HEALTH_CACHE_TTL_MS)
+            (now - mem.at) < PAYMENT_HEALTH_CACHE_TTL_MS
         ) {
             paymentHealthCache = mem.ok;
             paymentHealthCacheKey = STORE_KEY;
@@ -1142,18 +1122,16 @@
         slot.flightKey = STORE_KEY;
         slot.flight = (async () => {
             try {
-                const res = await fetch(`${PGSCRIPT_BASE}/${PGSCRIPT_API_VERSION}/payment-health-v2?store_key=${encodeURIComponent(STORE_KEY)}`, {
+                const res = await fetch(`${PGSCRIPT_BASE}/${PGSCRIPT_API_VERSION}/payment-health-v2`, {
                     method: 'GET',
                     cache: 'no-store',
                     headers: {
                         Accept: 'application/json',
+                        'X-Store-Key': STORE_KEY,
                     },
                 });
 
                 const body = await res.json().catch(() => ({}));
-                if (res.status >= 500) {
-                    return keepLastHealthOnBlip(slot, new Error('HTTP ' + res.status));
-                }
                 // Wajib success === true. Response 200 tanpa success TIDAK dianggap ON.
                 if (!res.ok || body?.success !== true) {
                     console.log('[Deposit is disabled]');
@@ -1164,7 +1142,9 @@
                 console.log('✅ [SPEED-QRIS] payment-health OK');
                 return rememberPaymentHealth(true);
             } catch (err) {
-                return keepLastHealthOnBlip(slot, err);
+                console.log('[Deposit is disabled]');
+                console.warn('❌ [SPEED-QRIS] payment-health check failed (fail-closed):', err?.message || err);
+                return rememberPaymentHealth(false);
             } finally {
                 if (slot.flightKey === STORE_KEY) {
                     slot.flight = null;
@@ -1176,10 +1156,70 @@
         return slot.flight;
     }
 
+    let holdSyntheticQris = false;
+
+    function qrisTabIsOurs(tab) {
+        return !!(tab && tab.getAttribute('data-poppay-made') === '1');
+    }
+
+    function removeMadeQrisTab() {
+        holdSyntheticQris = false;
+        const tab = document.getElementById('deposit-qr-tab');
+        if (qrisTabIsOurs(tab)) tab.remove();
+    }
+
+    function selectMadeQrisTab(tab) {
+        if (!qrisTabIsOurs(tab)) return;
+        holdSyntheticQris = true;
+        const list = tab.parentElement;
+        if (list) {
+            list.querySelectorAll('[role="tab"], .sidebar_deposit').forEach((el) => {
+                if (el === tab) return;
+                el.setAttribute('aria-selected', 'false');
+                el.removeAttribute('data-headlessui-state');
+                el.setAttribute('tabindex', '-1');
+            });
+        }
+        tab.setAttribute('aria-selected', 'true');
+        tab.setAttribute('data-headlessui-state', 'selected');
+        tab.setAttribute('tabindex', '0');
+    }
+
+    function clearMadeQrisTab() {
+        holdSyntheticQris = false;
+        const tab = document.getElementById('deposit-qr-tab');
+        if (!qrisTabIsOurs(tab)) return;
+        tab.setAttribute('aria-selected', 'false');
+        tab.removeAttribute('data-headlessui-state');
+        tab.setAttribute('tabindex', '-1');
+    }
+
+    function ensureQrisTab() {
+        const existing = document.getElementById('deposit-qr-tab');
+        if (existing) return existing;
+        const list = document.getElementById('deposit-desktop-tab')
+            || document.getElementById('deposit-bank-tab')?.parentElement
+            || document.getElementById('deposit-ewallet-tab')?.parentElement;
+        if (!list) return null;
+        const sample = document.getElementById('deposit-ewallet-tab') || document.getElementById('deposit-bank-tab');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.id = 'deposit-qr-tab';
+        btn.className = sample
+            ? sample.className
+            : 'sidebar_deposit flex h-[56px] w-full items-center justify-start gap-1 px-4 py-4 focus:outline-none';
+        btn.setAttribute('role', 'tab');
+        btn.setAttribute('aria-selected', 'false');
+        btn.setAttribute('tabindex', '-1');
+        btn.setAttribute('data-poppay-made', '1');
+        btn.innerHTML = '<span aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M3 3h8v8H3V3zm2 2v4h4V5H5zm8-2h8v8h-8V3zm2 2v4h4V5h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5zm10 0h2v2h-2v-2zm4 0h2v2h-2v-2zm-4 4h2v2h-2v-2zm2 2h2v2h-2v-2z"/></svg></span><span>QRIS</span>';
+        list.appendChild(btn);
+        console.log('[SPEED-QRIS] Tab QRIS tidak ada — dibuat');
+        return btn;
+    }
+
     function teardownInjection() {
         const wrapper = document.getElementById('ug-poppay-wrapper');
-        const hadHidden = !!document.querySelector('[data-poppay-hidden="true"], [data-speed-native-form="true"]');
-        if (!wrapper && !isInjected && !hadHidden) return;
         if (wrapper) {
             wrapper.remove();
         }
@@ -1203,13 +1243,25 @@
     }
 
     async function syncInjectionToQRISTab(reason) {
-        if (paymentHealthCached() === false) {
+        if (!isDepositPage()) {
+            removeMadeQrisTab();
+            if (isInjected) teardownInjection();
+            return false;
+        }
+
+        const healthOk = await checkPaymentHealth();
+        if (!healthOk) {
+            removeMadeQrisTab();
             if (isInjected || document.getElementById('ug-poppay-wrapper')) teardownInjection();
             return false;
         }
-        if (!isDepositPage()) {
-            if (isInjected) teardownInjection();
-            return false;
+
+        ensureQrisTab();
+        if (holdSyntheticQris) {
+            const made = document.getElementById('deposit-qr-tab');
+            if (qrisTabIsOurs(made) && made.getAttribute('aria-selected') !== 'true') {
+                selectMadeQrisTab(made);
+            }
         }
 
         if (!isQRISTabActive()) {
@@ -1315,7 +1367,7 @@
     async function replaceQRIS() {
         const paymentHealthOk = await checkPaymentHealth();
         if (!paymentHealthOk) {
-            if (isInjected || document.getElementById('ug-poppay-wrapper')) teardownInjection();
+            teardownInjection();
             return false;
         }
 
@@ -2390,11 +2442,6 @@
             const promotionSelect = document.getElementById('depositPromotionAutoQris');
             const amountHidden = document.getElementById('depositAmountAutoQris');
             const submitBtn = form.querySelector('.qris-submit-btn');
-            const cooldownUser = (_cachedUsername || getUsernameFromAuthToken() || getUsernameFromHeaderProfile() || '').trim();
-            if (_cooldownRemainingMs(cooldownUser)) {
-                _applyDepositCooldown(submitBtn, btnText, cooldownUser);
-                return;
-            }
 
             if (!promotionSelect || !promotionSelect.value || !amountHidden.value) {
                 // Reset button if no promo selected or no amount
@@ -2461,7 +2508,6 @@
             const remNow = _cooldownRemainingMs(cooldownUser);
             if (remNow) {
                 _applyDepositCooldown(this.querySelector('.qris-submit-btn'), btnText, cooldownUser);
-                alert(_cooldownLabel(remNow));
                 return false;
             }
             formSubmitInProgress = true;
@@ -2580,12 +2626,10 @@
                         </div>
                     `;
 
-                    _markDepositCooldown(username);
-                    _applyDepositCooldown(submitBtn, btnText, username);
                     setTimeout(() => {
                         resetForm();
                         formSubmitInProgress = false;
-                        console.log('✅ [SPEED-QRIS] Sudah bayar, jeda 1 menit mulai');
+                        console.log('✅ [SPEED-QRIS] Submit flag reset (success)');
                     }, 5000);
                 };
 
@@ -2604,11 +2648,6 @@
                     console.log('✅ [SPEED-QRIS] Submit flag reset (cancelled)');
                 };
 
-                const remPay = _cooldownRemainingMs(username);
-                if (remPay) {
-                    throw new Error(_cooldownLabel(remPay));
-                }
-
                 const payment = new window.QrisSDK(sdkConfig);
                 payment.openPayment();
 
@@ -2617,7 +2656,9 @@
                     if (frame && frame.children.length > 0) {
                         clearInterval(waitQr);
                         formSubmitInProgress = false;
-                        console.log('✅ [SPEED-QRIS] QR ready — jeda belum mulai, nunggu pembayaran');
+                        _markDepositCooldown(username);
+                        _applyDepositCooldown(submitBtn, btnText, username);
+                        console.log('✅ [SPEED-QRIS] QR ready, bisa deposit lagi setelah 1 menit');
                     }
                 }, 200);
                 setTimeout(() => {
@@ -2720,24 +2761,18 @@
 
     function _cooldownKey(username) {
         const u = String(username || '').trim().toLowerCase();
-        if (!isValidUsername(u)) return '';
-        return '__speed_qris_last__:' + u;
+        return '__speed_qris_last__:' + (u || 'session');
     }
 
     function _cooldownRemainingMs(username) {
-        const key = _cooldownKey(username);
-        if (!key) return 0;
         let last = 0;
-        try { last = parseInt(localStorage.getItem(key) || '0', 10) || 0; } catch (e) { last = 0; }
+        try { last = parseInt(localStorage.getItem(_cooldownKey(username)) || '0', 10) || 0; } catch (e) { last = 0; }
         const rem = SUBMIT_COOLDOWN_MS - (Date.now() - last);
         return rem > 0 ? rem : 0;
     }
 
     function _markDepositCooldown(username) {
-        const key = _cooldownKey(username);
-        if (!key) return;
-        try { localStorage.setItem(key, String(Date.now())); } catch (e) { }
-        try { localStorage.removeItem('__speed_qris_last__:session'); } catch (e) { }
+        try { localStorage.setItem(_cooldownKey(username), String(Date.now())); } catch (e) { }
     }
 
     function _clearCooldownTimer() {
@@ -2749,7 +2784,7 @@
 
     function _cooldownLabel(rem) {
         const sec = Math.ceil(rem / 1000);
-        return 'Mohon tunggu ' + sec + ' detik untuk membuat deposit baru';
+        return 'Bisa deposit lagi dalam ' + sec + ' detik';
     }
 
     function _paintCooldownNote(rem) {
@@ -2760,7 +2795,7 @@
                 return;
             }
             el.style.display = 'block';
-            el.textContent = _cooldownLabel(rem);
+            el.textContent = _cooldownLabel(rem) + '. Bisa deposit lagi setelah 1 menit.';
         });
     }
 
@@ -2799,7 +2834,7 @@
 
             const paymentHealthOk = await checkPaymentHealth();
             if (!paymentHealthOk) {
-                if (isInjected || document.getElementById('ug-poppay-wrapper')) teardownInjection();
+                teardownInjection();
                 return;
             }
 
@@ -2859,6 +2894,8 @@
                 if (tab.closest('#ug-poppay-wrapper') || tab.closest('#ug-poppay-qris-full')) return;
 
                 const isQr = !!(tab.id === 'deposit-qr-tab' || tab.closest('#deposit-qr-tab'));
+                if (isQr && qrisTabIsOurs(tab)) selectMadeQrisTab(tab);
+                else if (!isQr) clearMadeQrisTab();
                 console.log(`⚠️ [SPEED-QRIS] Tab click → ${isQr ? 'QRIS (inject)' : 'other (teardown)'}`);
                 onTabChange(isQr ? 'QRISClick' : 'OtherTab');
             }, true);
@@ -2872,7 +2909,8 @@
             try {
                 const healthOk = await checkPaymentHealth();
                 if (!healthOk) {
-                    if (isInjected || document.getElementById('ug-poppay-wrapper')) teardownInjection();
+                    removeMadeQrisTab();
+                    teardownInjection();
                     return;
                 }
 
@@ -2891,8 +2929,18 @@
             if (reinjectionInProgress) return;
             if (!isDepositPage()) return;
 
+            if (paymentHealthCache === true) {
+                ensureQrisTab();
+                if (holdSyntheticQris) {
+                    const made = document.getElementById('deposit-qr-tab');
+                    if (qrisTabIsOurs(made) && made.getAttribute('aria-selected') !== 'true') {
+                        selectMadeQrisTab(made);
+                    }
+                }
+            }
+
             const qrTab = document.getElementById('deposit-qr-tab');
-            if (qrTab) {
+            if (qrTab && !qrisTabIsOurs(qrTab)) {
                 qrTab.style.display = '';
                 qrTab.style.visibility = '';
                 qrTab.removeAttribute('data-poppay-hidden');
@@ -2941,9 +2989,11 @@
 
         const paymentHealthOk = await checkPaymentHealth();
         if (!paymentHealthOk) {
-            if (isInjected || document.getElementById('ug-poppay-wrapper')) teardownInjection();
+            removeMadeQrisTab();
+            teardownInjection();
             return;
         }
+        ensureQrisTab();
 
         const hasUsername = await validateUsernameExists();
         if (!hasUsername) {
