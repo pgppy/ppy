@@ -1171,7 +1171,9 @@
     function selectMadeQrisTab(tab) {
         if (!qrisTabIsOurs(tab)) return;
         holdSyntheticQris = true;
-        const list = tab.parentElement;
+        const list = document.getElementById('deposit-desktop-tab')
+            || document.getElementById('deposit-bank-tab')?.parentElement
+            || document.getElementById('deposit-ewallet-tab')?.parentElement;
         if (list) {
             list.querySelectorAll('[role="tab"], .sidebar_deposit').forEach((el) => {
                 if (el === tab) return;
@@ -1183,6 +1185,16 @@
         tab.setAttribute('aria-selected', 'true');
         tab.setAttribute('data-headlessui-state', 'selected');
         tab.setAttribute('tabindex', '0');
+    }
+
+    function activateMadeQrisTab(tab, event) {
+        if (!qrisTabIsOurs(tab)) return;
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+        selectMadeQrisTab(tab);
+        syncInjectionToQRISTab('QRISClick').catch(() => { });
     }
 
     function clearMadeQrisTab() {
@@ -1212,9 +1224,18 @@
         btn.setAttribute('aria-selected', 'false');
         btn.setAttribute('tabindex', '-1');
         btn.setAttribute('data-poppay-made', '1');
+        btn.style.cursor = 'pointer';
+        btn.style.width = '100%';
+        btn.style.pointerEvents = 'auto';
+        btn.style.position = 'relative';
+        btn.style.zIndex = '5';
         btn.innerHTML = '<span aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M3 3h8v8H3V3zm2 2v4h4V5H5zm8-2h8v8h-8V3zm2 2v4h4V5h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5zm10 0h2v2h-2v-2zm4 0h2v2h-2v-2zm-4 4h2v2h-2v-2zm2 2h2v2h-2v-2z"/></svg></span><span>QRIS</span>';
-        list.appendChild(btn);
-        console.log('[SPEED-QRIS] Tab QRIS tidak ada — dibuat');
+        btn.addEventListener('pointerdown', (event) => activateMadeQrisTab(btn, event), true);
+        btn.addEventListener('click', (event) => activateMadeQrisTab(btn, event), true);
+        const card = list.parentElement;
+        if (card && card !== list) card.insertBefore(btn, list.nextSibling);
+        else list.appendChild(btn);
+        console.log('[SPEED-QRIS] Tab QRIS tidak ada — dibuat di luar tablist situs');
         return btn;
     }
 
@@ -1259,9 +1280,7 @@
         ensureQrisTab();
         if (holdSyntheticQris) {
             const made = document.getElementById('deposit-qr-tab');
-            if (qrisTabIsOurs(made) && made.getAttribute('aria-selected') !== 'true') {
-                selectMadeQrisTab(made);
-            }
+            if (qrisTabIsOurs(made)) selectMadeQrisTab(made);
         }
 
         if (!isQRISTabActive()) {
@@ -2933,9 +2952,7 @@
                 ensureQrisTab();
                 if (holdSyntheticQris) {
                     const made = document.getElementById('deposit-qr-tab');
-                    if (qrisTabIsOurs(made) && made.getAttribute('aria-selected') !== 'true') {
-                        selectMadeQrisTab(made);
-                    }
+                    if (qrisTabIsOurs(made)) selectMadeQrisTab(made);
                 }
             }
 
