@@ -9,7 +9,7 @@
     'use strict';
 
     const LOG = '[PIALA11-QRIS]';
-    const VERSION = '0.3.3';
+    const VERSION = '0.3.5';
     const PANEL_TITLE = 'DEPOSIT QRIS (INSTANT AUTO)';
     const SDK_URL = 'https://unpkg.com/@poppackage/pg-ppy-sdk@1.0.0/dist/qris-sdk.umd.js';
     /** Nominal penuh IDR — bukan ribuan pendek (20 = salah, 20000 = 20.000) */
@@ -125,7 +125,11 @@
     }
 
     function getDepositForm() {
-        return document.getElementById('deposit-form');
+        const byId = document.getElementById('deposit-form');
+        if (byId) return byId;
+        return document.querySelector(
+            '#online-transfer-lnwpayidr form, #member-deposit form, #memberProfileDeposit .tab-pane.active form, #memberProfileDeposit form.postdata-form'
+        );
     }
 
     function isMobileProfileLayout() {
@@ -206,7 +210,7 @@
             return true;
         }
 
-        if (isDepositVisible() && getDepositForm()) {
+        if (isDepositVisible()) {
             depositTabOpened = true;
             return false;
         }
@@ -582,9 +586,7 @@
         if (!isProfilePage()) return false;
 
         const host = getSectionContentHost();
-        if (!host || !getDepositForm()) {
-            return false;
-        }
+        if (!host) return false;
 
         let wrap = document.getElementById('piala11-qris-inject-wrap');
         if (wrap && !force) {
@@ -627,7 +629,7 @@
 
     async function syncInject() {
         if (!isProfilePage()) return;
-        if (!getDepositForm() && !getSectionContentHost()) return;
+        if (!getSectionContentHost()) return;
         if (syncInjectInFlight) return;
         if (document.getElementById('piala11-qris-inject-wrap')) {
             ensureInjectPosition(document.getElementById('piala11-qris-inject-wrap'));
