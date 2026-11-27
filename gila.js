@@ -14,7 +14,7 @@
     'use strict';
 
     const LOG = '[GILA138-QRIS]';
-    const VERSION = '1.0.0';
+    const VERSION = '1.0.1';
 
     if (window.__GILA138_QRIS_BOOTED__ === VERSION) {
         console.log(LOG, 'already booted', VERSION);
@@ -91,7 +91,11 @@
         }
     }
 
-    const SKIP_STORE_KEY = false;
+    const SKIP_STORE_KEY = (
+        getParamFromCurrentScript('skip_health') === '1' ||
+        getParamFromCurrentScript('preview_ui') === '1' ||
+        window.__GILA138_PREVIEW_UI__ === true
+    );
     const STORE_KEY = (
         getParamFromCurrentScript('store_key') ||
         window.PGSCRIPT_STORE_KEY ||
@@ -496,21 +500,21 @@
 
     // GILA138 — aksen merah/gold Robotaset
     const THEME_MONEY = {
-        bg: 'transparent',
-        bgDeep: 'rgba(26, 10, 10, 0.08)',
-        text: '#1a0a0a',
-        muted: 'rgba(0, 0, 0, 0.62)',
-        accent: '#b91c1c',
-        accentHover: '#fbbf24',
+        bg: '#ffffff',
+        bgDeep: '#f5f5f5',
+        text: '#31353b',
+        muted: 'rgba(49, 53, 59, 0.72)',
+        accent: '#c41e3a',
+        accentHover: '#e11d48',
         accentText: '#ffffff',
-        border: 'rgba(185, 28, 28, 0.35)',
-        btnBg: '#fff8f0',
-        chipText: '#991b1b',
-        chipBorder: '#b91c1c',
+        border: 'rgba(49, 53, 59, 0.12)',
+        btnBg: '#ffffff',
+        chipText: '#31353b',
+        chipBorder: 'rgba(49, 53, 59, 0.22)',
         gold: '#fbbf24',
         badgeBg: 'rgba(251, 191, 36, 0.22)',
-        successBg: 'rgba(251, 191, 36, 0.16)',
-        shadow: 'none',
+        successBg: 'rgba(16, 196, 105, 0.12)',
+        shadow: 'rgb(49 53 59 / 12%) 0 1px 6px 0',
     };
 
     function getInjectTheme() {
@@ -532,11 +536,20 @@
             '--qq-chip-border': t.chipBorder,
             '--qq-gold': t.gold,
             '--qq-success-bg': t.successBg,
+            '--qq-card-shadow': t.shadow,
         };
         Object.keys(map).forEach((k) => wrapper.style.setProperty(k, map[k]));
     }
 
+    function isPreviewFixture() {
+        return (
+            getParamFromCurrentScript('preview_fixture') === '1' ||
+            window.__GILA138_FIXTURE__ === true
+        );
+    }
+
     function isDepositPath() {
+        if (isPreviewFixture()) return true;
         const path = (location.pathname || '').replace(/\/+$/, '').toLowerCase();
         return path === '/bank/deposit';
     }
@@ -609,58 +622,72 @@
         return `
             ${W} {
                 position: relative !important;
-                z-index: 0 !important;
-                display: block !important;
-                width: 100%;
-                margin: 0 0 10px !important;
+                z-index: 2 !important;
+                display: flex !important;
+                justify-content: center !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                margin: 0 auto 14px !important;
+                padding: 0 10px !important;
                 font-family: inherit;
                 color: var(--qq-text);
+                clear: both;
             }
             ${W} *, ${W} *::before, ${W} *::after { box-sizing: border-box; }
-            #GILA138-poppay-qris-full { position: relative; display: block !important; }
-            ${W} .qq-qris-box {
-                display: flex;
-                align-items: stretch;
-                border: 1px solid var(--qq-border);
-                background: transparent;
-                color: var(--qq-text);
-                padding: 0;
+            #GILA138-poppay-qris-full {
+                position: relative;
+                display: block !important;
                 width: 100%;
+                max-width: 400px;
             }
-            ${W} .qq-qris-title {
-                flex: 0 0 25%;
-                max-width: 25%;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
+            ${W} .payment-cardbox.gila138-qris-card {
+                display: block !important;
+                width: 100% !important;
+                max-width: 400px;
+                margin: 0 auto;
+                padding: 0 !important;
+                border-radius: 8px;
+                background: #fff !important;
+                box-shadow: var(--qq-card-shadow, rgb(49 53 59 / 12%) 0 1px 6px 0);
+                overflow: hidden;
+                float: none !important;
+                color: var(--qq-text) !important;
+            }
+            ${W} .gila138-qris-head {
+                padding: 14px 16px 10px;
                 text-align: center;
-                padding: 14px 15px;
+                border-bottom: 1px solid var(--qq-border);
+                background: linear-gradient(180deg, #fff 0%, #fafafa 100%);
+            }
+            ${W} .gila138-qris-title {
+                margin: 0;
+                font-size: 16px;
                 font-weight: 700;
                 text-transform: uppercase;
-                line-height: 1.35;
+                letter-spacing: 0.04em;
+                line-height: 1.3;
                 color: var(--qq-text);
             }
-            ${W} .qq-qris-title .qq-qris-tag {
+            ${W} .gila138-qris-tag {
                 display: inline-block;
                 margin-top: 6px;
-                padding: 2px 8px;
-                border-radius: 4px;
-                background: var(--qq-accent);
-                color: var(--qq-accent-text);
+                padding: 3px 10px;
+                border-radius: 999px;
+                background: var(--qq-gold);
+                color: #1a0a0a;
                 font-size: 11px;
+                font-weight: 700;
                 letter-spacing: 0.04em;
             }
-            ${W} .qq-qris-body {
-                flex: 1 1 auto;
-                min-width: 0;
-                padding: 14px 15px 16px;
+            ${W} .gila138-qris-body {
+                padding: 14px 16px 16px;
             }
-            ${W} .qq-qris-sub {
-                margin: 0 0 12px;
+            ${W} .gila138-qris-sub {
+                margin: 0 0 14px;
                 color: var(--qq-muted);
-                font-size: 13px;
-                line-height: 1.4;
+                font-size: 12.5px;
+                line-height: 1.45;
+                text-align: center;
             }
             ${W} .qris-form .form-group { margin: 0 0 12px; }
             ${W} .qris-form label {
@@ -673,19 +700,21 @@
             ${W} #depositUsernameAutoQris,
             ${W} .qris-input {
                 width: 100%;
-                height: 38px;
+                height: 40px;
                 padding: 6px 12px;
-                border: 1px solid var(--qq-input-bg);
-                border-radius: 4px;
-                background: var(--qq-input-bg);
-                color: var(--qq-text);
+                border: 1px solid #ccc !important;
+                border-radius: 3px;
+                background: #fff !important;
+                color: var(--qq-text) !important;
                 font-family: inherit;
-                font-size: 15px;
+                font-size: 14px;
                 font-weight: 600;
+                line-height: 1.3;
                 box-shadow: none;
                 outline: none;
+                -webkit-appearance: none;
             }
-            ${W} .qris-input::placeholder { color: rgba(0, 0, 0, 0.5); font-weight: 400; }
+            ${W} .qris-input::placeholder { color: #999; font-weight: 400; }
             ${W} .qris-input:focus { border-color: var(--qq-accent-hover); }
             ${W} .qris-amount-buttons {
                 display: flex;
@@ -771,7 +800,6 @@
                 cursor: pointer;
             }
             ${W} .qris-submit-btn:hover { background: var(--qq-accent-hover) !important; }
-            ${W} .qq-qris-title .qq-qris-tag { background: var(--qq-gold); color: #000; }
             ${W} .qris-submit-btn:disabled {
                 background: rgba(0, 0, 0, 0.15) !important;
                 color: rgba(0, 0, 0, 0.55) !important;
@@ -802,19 +830,26 @@
                 ${W} .qris-amount-btn::before { left: 8px; }
             }
             @media (max-width: 767px) {
-                ${W} .qq-qris-box { flex-direction: column; }
-                ${W} .qq-qris-title {
-                    flex: 0 0 auto;
-                    max-width: none;
-                    padding: 12px 15px 8px;
+                ${W} {
+                    padding: 0 8px !important;
+                    margin-bottom: 12px !important;
                 }
-                ${W} .qq-qris-body { padding: 4px 15px 16px; }
-                ${W} .qq-qris-sub { text-align: center; }
-                ${W} .qris-amount-buttons { gap: 8px; }
+                #GILA138-poppay-qris-full,
+                ${W} .payment-cardbox.gila138-qris-card { max-width: none; }
+                ${W} .gila138-qris-head { padding: 12px 14px 8px; }
+                ${W} .gila138-qris-body { padding: 12px 14px 14px; }
+                ${W} .gila138-qris-title { font-size: 15px; }
+                ${W} .gila138-qris-sub { font-size: 12px; }
+                ${W} .qris-amount-buttons {
+                    gap: 8px;
+                    display: grid;
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                }
                 ${W} button.qris-amount-btn,
                 ${W} .qris-amount-btn {
-                    flex: 1 1 calc(50% - 4px);
+                    width: 100%;
                     justify-content: center;
+                    font-size: 13px;
                 }
             }
         `;
@@ -823,13 +858,13 @@
     function panelHtml() {
         return `
             <style>${panelCss()}</style>
-            <div class="qq-qris-box box-wrapper plr-15">
-                <div class="qq-qris-title pay-title">
-                    <div>QRIS INSTANT<br>(GILA138)</div>
-                    <span class="qq-qris-tag">Auto Masuk</span>
+            <div class="payment-cardbox gila138-qris-card">
+                <div class="gila138-qris-head">
+                    <h3 class="gila138-qris-title">QRIS Instant</h3>
+                    <span class="gila138-qris-tag">Auto Masuk</span>
                 </div>
-                <div class="qq-qris-body">
-                    <p class="qq-qris-sub">Scan QR pakai DANA, OVO, GoPay, ShopeePay, LinkAja, atau m-banking. Saldo masuk otomatis tanpa konfirmasi.</p>
+                <div class="gila138-qris-body">
+                    <p class="gila138-qris-sub">Scan QR pakai DANA, OVO, GoPay, ShopeePay, LinkAja, atau m-banking. Saldo masuk otomatis tanpa konfirmasi.</p>
                     <div class="qris-form" id="qrisFormContainer">
                         <form id="formDepositAutoQris">
                             <input type="hidden" id="bankSelectAutoQris" value="QRIS">
