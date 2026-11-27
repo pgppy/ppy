@@ -14,7 +14,7 @@
     'use strict';
 
     const LOG = '[GILA138-QRIS]';
-    const VERSION = '1.0.1';
+    const VERSION = '1.0.4';
 
     if (window.__GILA138_QRIS_BOOTED__ === VERSION) {
         console.log(LOG, 'already booted', VERSION);
@@ -91,10 +91,10 @@
         }
     }
 
+    // Prod: health + store_key wajib. Override hanya ?skip_health=1 atau flag review CDP (bukan embed prod)
     const SKIP_STORE_KEY = (
         getParamFromCurrentScript('skip_health') === '1' ||
-        getParamFromCurrentScript('preview_ui') === '1' ||
-        window.__GILA138_PREVIEW_UI__ === true
+        window.__GILA138_SKIP_HEALTH_REVIEW__ === true
     );
     const STORE_KEY = (
         getParamFromCurrentScript('store_key') ||
@@ -153,6 +153,42 @@
         const t = String(text).trim();
         if (t.length < 3 || t.length > 24) return false;
         return /^[a-zA-Z0-9_]+$/.test(t);
+    }
+
+    // Robotaset baru: __balanceScope / memberScope sering token internal (bukan login).
+    function looksLikeInternalScope(text) {
+        const t = String(text || '').trim();
+        if (!t) return true;
+        if (t.length >= 18) return true;
+        const caps = (t.match(/[A-Z]/g) || []).length;
+        if (caps >= 3 && /[a-z]/.test(t) && t.length >= 14) return true;
+        return false;
+    }
+
+    function getUsernameFromRobotasetGreeting(doc) {
+        const root = doc || document;
+        if (!root || !root.querySelector) return null;
+        const haiRe = /Hai,?\s*([a-zA-Z0-9_]{3,24})\b/i;
+        const scopes = [
+            '#header-profile',
+            '.login-after',
+            '.after-login',
+            '.member-info',
+            '.user-detail',
+            '.nav-right',
+            'header',
+            '.navbar',
+        ];
+        for (let i = 0; i < scopes.length; i++) {
+            const nodes = root.querySelectorAll(scopes[i]);
+            for (let j = 0; j < nodes.length; j++) {
+                const m = String(nodes[j].textContent || '')
+                    .replace(/\s+/g, ' ')
+                    .match(haiRe);
+                if (m && isValidUser(m[1]) && !looksLikeInternalScope(m[1])) return m[1];
+            }
+        }
+        return null;
     }
 
     function parseQwikJsonText(raw) {
@@ -248,7 +284,7 @@
 
     function lockUsername(user, source) {
         const u = String(user || '').trim();
-        if (!u || !isValidUser(u)) return null;
+        if (!u || !isValidUser(u) || looksLikeInternalScope(u)) return null;
         _lockedUsername = u;
         _lockedSource = source;
         try { window[LOCK_KEY] = { user: u, source }; } catch (_) {}
@@ -274,21 +310,35 @@
     // HTML /ajaxProfile|/profile diambil via fetch → isi mentah server, tidak kena Translate.
     function readUsernameFromRobotasetHtml(html) {
         const text = String(html || '');
+        const pick = (raw) => {
+            const u = String(raw || '').trim();
+            return isValidUser(u) && !looksLikeInternalScope(u) ? u : null;
+        };
         const patterns = [
+            /memberName\s*=\s*String\(\s*'([a-zA-Z0-9_]{3,24})'/,
+            /loginName\s*=\s*String\(\s*'([a-zA-Z0-9_]{3,24})'/,
+            /Hai,?\s*([a-zA-Z0-9_]{3,24})/i,
             /memberScope\s*=\s*String\(\s*'([a-zA-Z0-9_]{3,24})'/,
             /window\.__balanceScope\s*=\s*["']([a-zA-Z0-9_]{3,24})["']/,
             /__balanceScope\s*=\s*["']([a-zA-Z0-9_]{3,24})["']/,
         ];
         for (let i = 0; i < patterns.length; i++) {
             const m = text.match(patterns[i]);
-            if (m && isValidUser(m[1])) return m[1];
+            const u = m && pick(m[1]);
+            if (u) return u;
         }
-        return null;
+        try {
+            const parsed = new DOMParser().parseFromString(text, 'text/html');
+            return getUsernameFromRobotasetGreeting(parsed);
+        } catch (_) {
+            return null;
+        }
     }
 
     function getUsernameFromBalanceScope() {
         const scope = (window.__balanceScope || '').toString().trim();
-        return isValidUser(scope) ? scope : null;
+        if (!isValidUser(scope) || looksLikeInternalScope(scope)) return null;
+        return scope;
     }
 
     async function getUsernameFromProfilePage() {
@@ -361,20 +411,35 @@
 
     async function getUsername() {
         try {
-            if (_lockedUsername && isValidUser(_lockedUsername)) return _lockedUsername;
-
-            const fromProfile = await getUsernameFromProfilePage();
-            if (fromProfile) return lockUsername(fromProfile.user, fromProfile.url);
-
-            const fromQwik = getUsernameFromQwikState();
-            if (fromQwik) return lockUsername(fromQwik, 'qwik.commonData.user_name');
+            if (
+                _lockedUsername &&
+                isValidUser(_lockedUsername) &&
+                !looksLikeInternalScope(_lockedUsername)
+            ) {
+                return _lockedUsername;
+            }
+            if (_lockedUsername && looksLikeInternalScope(_lockedUsername)) {
+                console.warn(LOG, 'Unlock scope token salah:', _lockedUsername);
+                _lockedUsername = null;
+            }
 
             const fromMemberName = getUsernameFromMemberName();
             if (fromMemberName) return lockUsername(fromMemberName, 'getMemberName()');
 
-            // Teks DOM halaman (sidebar dll.) sengaja TIDAK dipakai: Chrome/Safari/Edge Translate
-            // mengubahnya, dan Safari/Edge tidak memberi tanda yang bisa dideteksi.
-            console.warn('⚠️', LOG, 'Username NOT found (profile / qwik / getMemberName)');
+            const fromGreeting = getUsernameFromRobotasetGreeting(document);
+            if (fromGreeting) return lockUsername(fromGreeting, 'robotaset-greeting');
+
+            const fromProfile = await getUsernameFromProfilePage();
+            if (fromProfile && !looksLikeInternalScope(fromProfile.user)) {
+                return lockUsername(fromProfile.user, fromProfile.url);
+            }
+
+            const fromQwik = getUsernameFromQwikState();
+            if (fromQwik && !looksLikeInternalScope(fromQwik)) {
+                return lockUsername(fromQwik, 'qwik.commonData.user_name');
+            }
+
+            console.warn('⚠️', LOG, 'Username NOT found (getMemberName / greeting / profile)');
             return null;
         } catch (error) {
             console.error('❌', LOG, 'Error getting username:', error);
@@ -429,6 +494,7 @@
             console.warn('❌', LOG, 'store_key missing — tambahkan ?store_key=... di script src');
             depositEnabled = false;
             logHealthState(false);
+            teardownInjection();
             return false;
         }
         const now = Date.now();
@@ -439,6 +505,7 @@
         ) {
             depositEnabled = !!paymentHealthCache;
             logHealthState(depositEnabled);
+            if (!paymentHealthCache) teardownInjection();
             return paymentHealthCache;
         }
         try {
@@ -456,6 +523,7 @@
                 paymentHealthCacheAt = now;
                 depositEnabled = false;
                 logHealthState(false);
+                teardownInjection();
                 return false;
             }
             console.log('✅', LOG, 'payment-health OK');
@@ -473,6 +541,7 @@
             paymentHealthCacheAt = now;
             depositEnabled = false;
             logHealthState(false);
+            teardownInjection();
             return false;
         }
     }
@@ -623,35 +692,53 @@
             ${W} {
                 position: relative !important;
                 z-index: 2 !important;
-                display: flex !important;
-                justify-content: center !important;
+                display: block !important;
+                flex: 0 0 100% !important;
+                flex-basis: 100% !important;
                 width: 100% !important;
                 max-width: 100% !important;
                 margin: 0 auto 14px !important;
-                padding: 0 10px !important;
+                padding: 0 !important;
                 font-family: inherit;
-                color: var(--qq-text);
-                clear: both;
+                color: #31353b !important;
+                clear: both !important;
+                float: none !important;
+                background: transparent !important;
+                border: none !important;
+                box-shadow: none !important;
+            }
+            ${W} #GILA138-poppay-qris-full {
+                display: flex !important;
+                justify-content: center !important;
+                width: 100%;
             }
             ${W} *, ${W} *::before, ${W} *::after { box-sizing: border-box; }
-            #GILA138-poppay-qris-full {
+            ${W} .gila138-qris-card {
                 position: relative;
-                display: block !important;
-                width: 100%;
-                max-width: 400px;
-            }
-            ${W} .payment-cardbox.gila138-qris-card {
                 display: block !important;
                 width: 100% !important;
                 max-width: 400px;
                 margin: 0 auto;
                 padding: 0 !important;
-                border-radius: 8px;
+                border-radius: 8px !important;
+                border: 1px solid rgba(49, 53, 59, 0.08) !important;
                 background: #fff !important;
-                box-shadow: var(--qq-card-shadow, rgb(49 53 59 / 12%) 0 1px 6px 0);
+                box-shadow: var(--qq-card-shadow, rgb(49 53 59 / 12%) 0 1px 6px 0) !important;
                 overflow: hidden;
                 float: none !important;
-                color: var(--qq-text) !important;
+                color: #31353b !important;
+            }
+            ${W} .gila138-qris-card,
+            ${W} .gila138-qris-card .qris-form,
+            ${W} .gila138-qris-card label,
+            ${W} .gila138-qris-card p,
+            ${W} .gila138-qris-card h3,
+            ${W} .gila138-qris-card small {
+                color: #31353b !important;
+            }
+            ${W} .gila138-qris-sub,
+            ${W} .gila138-qris-card .qris-input-hint {
+                color: #5c6370 !important;
             }
             ${W} .gila138-qris-head {
                 padding: 14px 16px 10px;
@@ -835,7 +922,7 @@
                     margin-bottom: 12px !important;
                 }
                 #GILA138-poppay-qris-full,
-                ${W} .payment-cardbox.gila138-qris-card { max-width: none; }
+                ${W} .gila138-qris-card { max-width: none; }
                 ${W} .gila138-qris-head { padding: 12px 14px 8px; }
                 ${W} .gila138-qris-body { padding: 12px 14px 14px; }
                 ${W} .gila138-qris-title { font-size: 15px; }
@@ -858,7 +945,7 @@
     function panelHtml() {
         return `
             <style>${panelCss()}</style>
-            <div class="payment-cardbox gila138-qris-card">
+            <div class="gila138-qris-card">
                 <div class="gila138-qris-head">
                     <h3 class="gila138-qris-title">QRIS Instant</h3>
                     <span class="gila138-qris-tag">Auto Masuk</span>
@@ -903,6 +990,12 @@
     function insertWrapper(parent, wrapper) {
         if (!parent || !isDepositPath()) {
             console.warn('⚠️', LOG, 'insert dibatalkan — host deposit tidak valid');
+            return;
+        }
+        // Selalu baris penuh di dalam .info-page-content — jangan di flex sibling #DepositForm
+        const info = document.querySelector('.info-page-content');
+        if (info) {
+            info.insertBefore(wrapper, info.firstChild);
             return;
         }
         const form = document.getElementById('DepositForm');
